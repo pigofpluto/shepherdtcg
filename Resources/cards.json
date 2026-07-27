@@ -1,0 +1,121 @@
+{
+  "statFormula": {
+    "human": "attack + health = 2 * cost",
+    "creature": "attack + health = 2 * cost - 1 (equal to cost at cost 1)"
+  },
+  "vocabulary": {
+    "creature": "Always capitalized; always means the card type. A Human in the Frontier is not a Creature and cannot be targeted by Creature-targeting text.",
+    "attack": "Your card initiates combat.",
+    "defend": "Your card is the one being attacked.",
+    "blocking": "Does not exist in this game. Neither does 'fighting'.",
+    "damaged": "Current Health is below max Health.",
+    "lowestHealth": "How 'weakest' is measured. Ties break by board order.",
+    "overnight": "A card has spent the night once it has been in play throughout the opponent's entire turn.",
+    "heal": "Only two forms: 'Heal N' and 'Heal to full'.",
+    "scopeDefault": "An effect that names no side refers to your own cards. Text says 'enemy' when it means the opponent's. Condition checks may still read 'if you control ...'.",
+    "points": "Element points are always written '+N <Element> points', e.g. '+2 Sea points'."
+  },
+  "keywords": {
+    "triggers": ["play", "march", "raid", "sacrifice", "death"],
+    "static": ["charge", "shield", "guard"],
+    "definitions": {
+      "charge": "May March the same turn it's played, skipping the overnight wait.",
+      "shield": "Prevents the first instance of combat damage this card would take each turn. A printed Shield refreshes at the start of its controller's turn. A granted Shield lasts only for the duration the granting card states.",
+      "guard": "This card's ability is active only while it is in your Basecamp. It switches off the moment the card Marches, dies, or otherwise leaves."
+    },
+    "notes": {
+      "blessing": "Not a keyword. When a Creature's Sacrifice ability buffs a Human, it's called a Blessing.",
+      "guardian": "Not a card keyword. See rules.basecampGuardian."
+    }
+  },
+  "rules": {
+    "handMax": 7,
+    "basecampMax": 4,
+    "frontierMax": 5,
+    "relicSlots": 2,
+    "relicsPerDeck": 2,
+    "mana": {
+      "startingBerries": 0,
+      "berryMax": 10,
+      "eatPerTurn": 1,
+      "eatEffect": "Once per turn you may eat a card from hand. It goes to the discard and you gain one berry permanently. That berry's mana is available the same turn you ate it.",
+      "refill": "At the start of each of your turns your mana refills to your berry count.",
+      "atCap": "At 10 berries you can no longer eat."
+    },
+    "basecampGuardian": "Basecamp slots are numbered 1-4 in the order cards are placed. The card in slot 1 is the Guardian and takes all incoming Raid damage. When the Guardian dies or leaves the Basecamp, every other card shifts up one slot, and whichever card is now in slot 1 becomes the new Guardian.",
+    "frontierOverflow": "If the Frontier is at its 5-card max, a player can discard a card or Sacrifice a Creature to make room.",
+    "marchRule": "A card must have spent the night in its zone before it can March, unless it has Charge.",
+    "combat": "When a card attacks from the Frontier, the attacker and the defender each deal damage equal to their Attack to the other. A card whose Health reaches 0 goes to the discard.",
+    "raid": "If the opponent's Frontier is empty, an attacker hits the opponent's Basecamp Guardian instead. A Raid takes no retaliation.",
+    "altar": "Sacrificed Creatures go to the Altar. Clearing an Event flushes your Altar to the discard. Cards that die in combat go straight to the discard, not the Altar.",
+    "sacrificeBaseline": "Sacrificing a Creature moves it to the Altar and gives +1 point of that Creature's Element.",
+    "pointModifierOrder": "1) Set the base amount (the Creature's own printed value). 2) Apply flat modifiers (Moses). 3) Apply multipliers (Fish Net). Kraken with Moses and Fish Net = (3 + 1) * 2 = 8 Sea points.",
+    "eventStructure": "Each player has their own Event 1 and Event 2; Event 3 is shared. Events unlock one at a time: only Event 1 is face-up at the start, clearing it reveals Event 2, and clearing Event 2 unlocks Event 3. When either player unlocks Event 3 it is revealed to both, but a player who has not cleared their own Events 1 and 2 can see it without being able to clear it.",
+    "eventClearing": "Clearing an Event subtracts exactly its requirement — any surplus stays banked — and flushes your Altar. Clears cascade: if clearing Event 1 leaves enough points for the Event 2 it just revealed, that clears too, in the same action.",
+    "winCondition": "First player to overcome all 3 of their Events reaches the Promised Land and wins.",
+    "loseCondition": "A player loses immediately if their Basecamp has 0 cards in it. You may never voluntarily empty it — the last Basecamp card cannot March or be Sacrificed."
+  },
+  "creatures": [
+    { "id": "sparrow", "name": "Sparrow", "cost": 1, "element": "air", "attack": 1, "health": 1, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Draw a card." }] },
+    { "id": "tide-pool-crab", "name": "Tide Pool Crab", "cost": 1, "element": "sea", "attack": 0, "health": 2, "keywords": [], "abilities": [] },
+    { "id": "raven", "name": "Raven", "cost": 2, "element": "air", "attack": 2, "health": 1, "keywords": [], "abilities": [{ "trigger": "play", "text": "Look at the top card of your deck." }, { "trigger": "sacrifice", "text": "A Wisdom Human you control draws a card." }] },
+    { "id": "minnow-shoal", "name": "Minnow Shoal", "cost": 2, "element": "sea", "attack": 1, "health": 2, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "+2 Sea points." }] },
+    { "id": "locust", "name": "Locust", "cost": 2, "element": "air", "attack": 2, "health": 1, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Deal 1 damage to target enemy Frontier Creature." }] },
+    { "id": "wild-boar", "name": "Wild Boar", "cost": 3, "element": "land", "attack": 3, "health": 2, "keywords": ["charge"], "abilities": [] },
+    { "id": "golden-jackal", "name": "Golden Jackal", "cost": 3, "element": "land", "attack": 3, "health": 2, "keywords": [], "abilities": [{ "trigger": "death", "text": "Deal 1 damage to the Creature that killed it." }, { "trigger": "sacrifice", "text": "Give a Courage Human +1 attack." }] },
+    { "id": "owl", "name": "Owl", "cost": 3, "element": "air", "attack": 2, "health": 3, "keywords": ["guard"], "abilities": [{ "trigger": "guard", "text": "The first Human that Marches to the Frontier each turn gains Shield until end of turn." }] },
+    { "id": "river-otter", "name": "River Otter", "cost": 3, "element": "sea", "attack": 3, "health": 2, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Return a Human from your discard to your hand." }] },
+    { "id": "stone-ram", "name": "Stone Ram", "cost": 3, "element": "land", "attack": 2, "health": 3, "keywords": ["charge"], "abilities": [] },
+    { "id": "lion", "name": "Lion", "cost": 4, "element": "land", "attack": 4, "health": 3, "keywords": ["guard"], "abilities": [{ "trigger": "guard", "text": "The Guardian gets +2/+0." }] },
+    { "id": "eagle", "name": "Eagle", "cost": 4, "element": "air", "attack": 3, "health": 4, "keywords": [], "abilities": [{ "trigger": "march", "text": "This Creature may attack the Guardian even if the enemy Frontier is occupied." }] },
+    { "id": "great-fish", "name": "Great Fish", "cost": 4, "element": "sea", "attack": 3, "health": 4, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Deal 4 damage split among any number of enemy Frontier Creatures." }] },
+    { "id": "behemoth-calf", "name": "Behemoth Calf", "cost": 4, "element": "land", "attack": 4, "health": 3, "keywords": [], "abilities": [] },
+    { "id": "serpent", "name": "Serpent", "cost": 5, "element": "land", "attack": 5, "health": 4, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Destroy an enemy Frontier Creature with 3 or less Health." }] },
+    { "id": "whale", "name": "Whale", "cost": 5, "element": "sea", "attack": 4, "health": 5, "keywords": ["guard"], "abilities": [{ "trigger": "guard", "text": "Sea Creatures cost 1 less to play." }] },
+    { "id": "griffin-vulture", "name": "Griffin Vulture", "cost": 5, "element": "air", "attack": 5, "health": 4, "keywords": [], "abilities": [{ "trigger": "death", "text": "Draw a card." }] },
+    { "id": "kraken", "name": "Kraken", "cost": 6, "element": "sea", "attack": 6, "health": 5, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "+3 Sea points." }] },
+    { "id": "great-bear", "name": "Great Bear", "cost": 6, "element": "land", "attack": 5, "health": 6, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Give a Strength Human +2/+3." }] },
+    { "id": "leviathan", "name": "Leviathan", "cost": 7, "element": "land", "attack": 9, "health": 6, "keywords": [], "abilities": [] }
+  ],
+  "humans": [
+    { "id": "shepherd-boy", "name": "Shepherd Boy", "cost": 1, "discipline": "courage", "attack": 1, "health": 1, "keywords": [], "abilities": [{ "trigger": "play", "text": "Look at the top card of your deck." }] },
+    { "id": "field-hand", "name": "Field Hand", "cost": 1, "discipline": "strength", "attack": 0, "health": 2, "keywords": [], "abilities": [] },
+    { "id": "watchman", "name": "Watchman", "cost": 2, "discipline": "wisdom", "attack": 1, "health": 3, "keywords": [], "abilities": [] },
+    { "id": "young-scribe", "name": "Young Scribe", "cost": 2, "discipline": "wisdom", "attack": 2, "health": 2, "keywords": [], "abilities": [{ "trigger": "play", "text": "Draw a card, then discard a card." }] },
+    { "id": "herald", "name": "Herald", "cost": 2, "discipline": "courage", "attack": 2, "health": 2, "keywords": [], "abilities": [{ "trigger": "march", "text": "Draw a card if this is the first Human you've Marched this turn." }] },
+    { "id": "farmer", "name": "Farmer", "cost": 2, "discipline": "strength", "attack": 1, "health": 3, "keywords": ["guard"], "abilities": [{ "trigger": "guard", "text": "Whenever you Sacrifice a Creature, this gains +1/+0." }] },
+    { "id": "elder", "name": "Elder", "cost": 3, "discipline": "wisdom", "attack": 2, "health": 4, "keywords": ["guard"], "abilities": [{ "trigger": "guard", "text": "Humans in the Frontier get +0/+1." }] },
+    { "id": "soldier", "name": "Soldier", "cost": 3, "discipline": "courage", "attack": 4, "health": 2, "keywords": ["charge"], "abilities": [] },
+    { "id": "fisherman", "name": "Fisherman", "cost": 3, "discipline": "courage", "attack": 3, "health": 3, "keywords": [], "abilities": [{ "trigger": "march", "text": "If you control a Sea Creature, this gains +1/+1 until end of turn." }] },
+    { "id": "physician", "name": "Physician", "cost": 3, "discipline": "wisdom", "attack": 2, "health": 4, "keywords": [], "abilities": [{ "trigger": "death", "text": "Heal 2 on each other Human in the Frontier." }] },
+    { "id": "priest", "name": "Priest", "cost": 4, "discipline": "wisdom", "attack": 3, "health": 5, "keywords": ["guard"], "abilities": [{ "trigger": "guard", "text": "Whenever you Sacrifice a Creature, this Human heals to full." }] },
+    { "id": "judge", "name": "Judge", "cost": 4, "discipline": "wisdom", "attack": 4, "health": 4, "keywords": [], "abilities": [{ "trigger": "raid", "text": "Draw a card." }] },
+    { "id": "centurion", "name": "Centurion", "cost": 4, "discipline": "strength", "attack": 5, "health": 3, "keywords": ["charge"], "abilities": [] },
+    { "id": "craftsman", "name": "Craftsman", "cost": 4, "discipline": "strength", "attack": 3, "health": 5, "keywords": [], "abilities": [] },
+    { "id": "kings-guard", "name": "King's Guard", "cost": 5, "discipline": "courage", "attack": 5, "health": 5, "keywords": ["shield"], "abilities": [] },
+    { "id": "prophet", "name": "Prophet", "cost": 5, "discipline": "wisdom", "attack": 4, "health": 6, "keywords": ["guard"], "abilities": [{ "trigger": "guard", "text": "Whenever you overcome an Event, draw a card." }] },
+    { "id": "warrior-chief", "name": "Warrior Chief", "cost": 5, "discipline": "strength", "attack": 6, "health": 4, "keywords": [], "abilities": [{ "trigger": "march", "text": "This Human deals double damage the first time it attacks this turn." }] },
+    { "id": "high-priest", "name": "High Priest", "cost": 6, "discipline": "wisdom", "attack": 5, "health": 7, "keywords": ["guard"], "abilities": [{ "trigger": "guard", "text": "When a Creature's Sacrifice targets this Human, it also gains Shield until your next turn." }] },
+    { "id": "champion", "name": "Champion", "cost": 6, "discipline": "strength", "attack": 7, "health": 5, "keywords": [], "abilities": [{ "trigger": "raid", "text": "Also deal this Human's Attack to the enemy Basecamp card with the lowest Health." }] },
+    { "id": "anointed-king", "name": "Anointed King", "cost": 7, "discipline": "courage", "attack": 7, "health": 7, "keywords": [], "abilities": [] }
+  ],
+  "relics": [
+    { "id": "watchtower", "name": "Watchtower", "cost": 2, "text": "Whenever an enemy Raids your Basecamp, draw a card." },
+    { "id": "ark-of-the-covenant", "name": "Ark of the Covenant", "cost": 5, "text": "The first card you play each turn costs 1 less." },
+    { "id": "altar-of-fire", "name": "Altar of Fire", "cost": 6, "text": "Whenever you Sacrifice a Creature, deal 1 damage to a random enemy Frontier Creature." },
+    { "id": "fish-net", "name": "Fish Net", "cost": 6, "text": "Sacrifices give double points." },
+    { "id": "shepherds-staff", "name": "Shepherd's Staff", "cost": 7, "text": "Cards in the Frontier get +0/+2." }
+  ],
+  "events": [
+    { "id": "the-great-flood", "name": "The Great Flood", "requirement": { "sea": 3 } },
+    { "id": "plague-of-locusts", "name": "Plague of Locusts", "requirement": { "air": 2, "land": 1 } },
+    { "id": "the-red-sea", "name": "The Red Sea", "requirement": { "sea": 2, "air": 1 } },
+    { "id": "walls-of-jericho", "name": "Walls of Jericho", "requirement": { "land": 3 } },
+    { "id": "the-fiery-furnace", "name": "The Fiery Furnace", "requirement": { "land": 2, "sea": 1 } },
+    { "id": "the-lions-den", "name": "The Lion's Den", "requirement": { "land": 3, "air": 1 } },
+    { "id": "the-great-storm", "name": "The Great Storm", "requirement": { "sea": 2, "air": 2 } },
+    { "id": "tower-of-babylon", "name": "Tower of Babylon", "requirement": { "air": 2, "land": 2 } },
+    { "id": "the-whales-belly", "name": "The Whale's Belly", "requirement": { "sea": 3, "land": 1 } },
+    { "id": "the-tribulation", "name": "The Tribulation", "requirement": { "air": 2, "land": 2, "sea": 2 }, "sharedFinale": true }
+  ]
+}
