@@ -191,3 +191,83 @@ Raven — were resolved **in favour of the Swift version**, since that's what ru
   before the next round of changes.
 - 21 of 87 cards have art. Drop files into `Art/Cards/` and run
   `python3 import-art.py` — it reports what's still missing.
+
+---
+
+## Next: movement & animation
+
+Notes for whoever picks up board movement and card animation. Four things about
+the current architecture will shape the approach — the first two are obstacles,
+the last two are already in your favour.
+
+### 1. Board state is invisible to SwiftUI
+
+`PlayerBoard` and `CardInstance` are plain `final class` — **not**
+`ObservableObject`, no `@Published` anywhere. The only observable state on
+`MatchViewModel` is six properties (`turnSide`, `turnNumber`, `winner`, `log`,
+`selected`, `awaitingHandoff`). Everything else — hands, zones, stats, damage —
+refreshes solely because `settle()` calls `bump()` → `objectWillChange.send()`.
+
+SwiftUI cannot diff reference-type mutations, so `withAnimation` has nothing to
+interpolate: stat changes and zone moves will keep snapping no matter how they're
+wrapped. Fixing this is the prerequisite for everything else. Options, cheapest first:
+
+- Give `MiniCard` explicit `.animation(_, value:)` on the specific values it
+  draws (attack, health, shield), so each card animates its own changes.
+- Make `CardInstance` an `@Observable` (or `ObservableObject`) and observe it per
+  card view.
+- Move zone arrays onto the view model as `@Published`. Largest change; also the
+  most conventional.
+
+### 2. Effects resolve to a fixpoint before the view ever sees them
+
+`settle()` runs auras → deaths → repeat until stable, *then* bumps once. A chain
+like "Locust stings X → X dies → Y loses Elder's aura → Y dies" collapses into a
+single frame. Sequenced, beat-by-beat animation needs the engine to emit a
+**timeline of events**, not just a final state.
+
+The hook already half-exists: `note()` appends to `log` in resolution order, so
+there's an ordered record of everything that happened — it's just `[String]`.
+Promoting it to a structured enum (`.moved(card, from:to:)`, `.damaged(card, n)`,
+`.died(card)`, `.pointsGained(element, n)`) would give the animation layer a queue
+to play through, and the log strings could be derived from it so nothing is lost.
+
+### 3. Card identity is already stable — use it
+
+Every `ForEach` keys off `id: \.element.id`, a `UUID` that lives on the
+`CardInstance` for its whole lifetime. That's exactly what `matchedGeometryEffect`
+needs.
+
+Worth knowing: hand, Basecamp, Frontier and Relics are **four separate `ForEach`
+loops**, so a card Marching from Basecamp to Frontier is destroyed in one and
+created in the other. That's the textbook `matchedGeometryEffect` case rather
+than a problem — pair them on the shared `UUID` in a common namespace.
+
+### 4. Positions are already absolute and animatable
+
+`board(in:)` computes an aspect-fit rect for the playmat, then places everything
+via a `pt(fx, fy)` helper that maps mat-relative fractions to points, applied with
+`.position()` inside a `ZStack`. `.position` interpolates cleanly under
+`withAnimation` — no layout container is fighting you, and the fraction system
+means animations stay correct across device sizes.
+
+### Zones with no view to animate to
+
+Deck, discard and Altar are rendered as **text counters only**
+(`counter("\(vm.you.altar.count)")`), and the opponent's hand is just
+"N cards hidden". So "card flies to the Altar", draw animations, and
+discard animations have no destination or source view yet — those need real
+(even if face-down) card views placed at those mat positions first.
+
+Also note the playmat art has **5** printed Event slots but the sequential-Event
+change means only 3 badges render; if the mat gets redrawn, that's the moment to
+add proper Altar and deck card stacks too.
+
+### Suggested order
+
+1. Structured events from `note()` — unlocks sequencing.
+2. Per-card observability (option 1 or 2 above) — makes stat changes animate.
+3. `matchedGeometryEffect` for Basecamp ⇄ Frontier moves.
+4. Real card views for deck / discard / Altar, then draw and sacrifice animations.
+5. Attack/Raid choreography (lunge, damage numbers, death fade) last — it depends
+   on all of the above.
