@@ -16,5 +16,9 @@ xcuserdata/
 .swiftpm/
 .build/
 
+# Python tooling (check-card-sync.py, import-art.py)
+__pycache__/
+*.pyc
+
 # Backups / scratch
 *_original.png
