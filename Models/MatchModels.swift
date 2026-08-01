@@ -9,7 +9,36 @@ import Foundation
 
 enum PlayerSide { case you, foe }
 
-enum MatchZone { case hand, basecamp, frontier, altar }
+enum MatchZone { case deck, hand, basecamp, frontier, altar, discard }
+
+/// A short-lived visual cue — a floating damage number, a shield shattering, a
+/// point gain drifting toward its counter. Board state records that a card took
+/// 3 damage; it can't record that a red `−3` should rise off it, so the engine
+/// publishes these alongside the state and the view renders them on the card.
+///
+/// Cues expire on their own. They are never read back by the rules.
+struct VisualCue: Identifiable {
+    enum Kind {
+        case damage(Int)
+        case heal(Int)
+        case buff(attack: Int, health: Int)
+        case shieldBreak
+        case death
+        case points(Element, Int)
+        case berry
+        case draw
+    }
+
+    let id = UUID()
+    /// The `CardInstance` this cue belongs to, or `nil` for board-level cues
+    /// (a berry gained, points banked) which anchor to their player's counter.
+    let card: UUID?
+    let side: PlayerSide
+    let kind: Kind
+
+    /// A card marked for death — the view flashes it before it leaves the board.
+    var isDeath: Bool { if case .death = kind { return true }; return false }
+}
 
 /// A live copy of a card during a match (reference type for easy targeting).
 ///

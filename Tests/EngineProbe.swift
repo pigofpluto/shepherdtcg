@@ -19,18 +19,20 @@ func card(_ id: String, turn: Int = 1) -> CardInstance {
 
 /// Force the engine to run settle()/auras without caring what action does it.
 @MainActor
-func poke(_ vm: MatchViewModel, _ side: PlayerSide) {
+func poke(_ vm: MatchViewModel, _ side: PlayerSide) async {
     let b = vm.board(side)
     b.ateThisTurn = false
     b.berries = 0
     let filler = card("sparrow")
     b.hand.append(filler)
-    vm.eat(filler, on: side)
+    await vm.eat(filler, on: side)
 }
 
 @MainActor
 func freshMatch() -> MatchViewModel {
     let vm = MatchViewModel()
+    // Headless: no animation pauses, no cue-expiry tasks left dangling.
+    vm.instant = true
     // Neutral three-element ladder so a single-element Sacrifice in a non-Event
     // test can't accidentally clear a randomly-dealt Event and flush the Altar.
     let inert = CardLibrary.card(id: "the-tribulation")!
@@ -45,23 +47,24 @@ func freshMatch() -> MatchViewModel {
 
 @main
 struct Probe {
-    @MainActor static func main() {
+    @MainActor static func main() async {
 
         // ─────────────────────────────────────────────────────────────
         section("Mana — berries")
         do {
             let vm = MatchViewModel()
+            vm.instant = true
             check("starts at 0 berries", vm.you.berries == 0 && vm.you.mana == 0)
             let c = vm.you.hand[0]
             check("can eat on turn 1", vm.canEat(c, on: .you))
-            vm.eat(c, on: .you)
+            await vm.eat(c, on: .you)
             check("eating gives 1 berry, usable now", vm.you.berries == 1 && vm.you.mana == 1)
             check("eaten card goes to discard", vm.you.discard.contains { $0 === c })
             check("cannot eat twice in a turn", !vm.canEat(vm.you.hand[0], on: .you))
 
-            vm.endTurn(); vm.confirmHandoff()          // -> Player 2
+            await vm.endTurn(); await vm.confirmHandoff()          // -> Player 2
             check("P2 still at 0 berries", vm.foe.berries == 0)
-            vm.endTurn(); vm.confirmHandoff()          // -> Player 1
+            await vm.endTurn(); await vm.confirmHandoff()          // -> Player 1
             check("berry persists and refills", vm.you.berries == 1 && vm.you.mana == 1)
 
             vm.you.berries = 10
@@ -98,13 +101,13 @@ struct Probe {
             let elder = card("elder"), soldier = card("soldier")
             vm.you.basecamp.append(elder); elder.zone = .basecamp
             vm.you.frontier.append(soldier); soldier.zone = .frontier
-            poke(vm, .you)
+            await poke(vm, .you)
             check("Elder gives Frontier Humans +0/+1", soldier.maxHealth == 3, "got \(soldier.maxHealth)")
 
             // A Human sitting at exactly the aura's worth of health dies when it lapses.
             soldier.damage = 2                       // 3 max - 2 = 1 health
             vm.you.basecamp.removeAll()              // Elder leaves
-            poke(vm, .you)
+            await poke(vm, .you)
             check("aura retracts and kills the dependent card",
                   vm.you.frontier.isEmpty && vm.you.discard.contains { $0 === soldier })
         }
@@ -115,9 +118,9 @@ struct Probe {
             vm.you.basecamp.append(contentsOf: [elder, filler])
             elder.zone = .basecamp; filler.zone = .basecamp
             vm.you.frontier.append(soldier); soldier.zone = .frontier
-            poke(vm, .you)
+            await poke(vm, .you)
             check("Guard is live from the Basecamp", soldier.maxHealth == 3)
-            vm.march(elder, on: .you)
+            await vm.march(elder, on: .you)
             check("Guard switches off once it Marches", soldier.maxHealth == 2, "got \(soldier.maxHealth)")
         }
         do {
@@ -125,7 +128,7 @@ struct Probe {
             let lion = card("lion"), guardian = card("craftsman")
             vm.you.basecamp.append(contentsOf: [guardian, lion])
             guardian.zone = .basecamp; lion.zone = .basecamp
-            poke(vm, .you)
+            await poke(vm, .you)
             check("Lion gives the Guardian +2/+0", guardian.attack == 5, "got \(guardian.attack)")
             check("Lion does not buff itself when it isn't Guardian", lion.attack == 4)
         }
@@ -135,7 +138,7 @@ struct Probe {
             vm.you.basecamp.append(deborah); deborah.zone = .basecamp
             vm.you.frontier.append(soldier); soldier.zone = .frontier
             vm.you.relics.append(card("banner-of-courage"))
-            poke(vm, .you)
+            await poke(vm, .you)
             check("Deborah + Banner stack on a Courage Human", soldier.attack == 6, "got \(soldier.attack)")
         }
 
@@ -150,7 +153,7 @@ struct Probe {
             vm.foe.deck = [CardLibrary.card(id: "sparrow")!]
             vm.you.deck = [CardLibrary.card(id: "sparrow")!]
             let before = vm.you.hand.count
-            vm.attack(judge, target: nil, on: .you)
+            await vm.attack(judge, target: nil, on: .you)
             check("Judge draws on Raid", vm.you.hand.count == before + 1)
             check("Raid damages the Guardian", target.damage == 4, "got \(target.damage)")
         }
@@ -161,7 +164,7 @@ struct Probe {
             let guardian = card("h_goliath"), weak = card("watchman"), mid = card("craftsman")
             vm.foe.basecamp.append(contentsOf: [guardian, mid, weak])
             for c in vm.foe.basecamp { c.zone = .basecamp }
-            vm.attack(champion, target: nil, on: .you)
+            await vm.attack(champion, target: nil, on: .you)
             check("Champion hits the Guardian", guardian.damage == 7, "got \(guardian.damage)")
             check("Champion also hits lowest-Health behind it",
                   vm.foe.discard.contains { $0 === weak }, "watchman should have died")
@@ -175,7 +178,7 @@ struct Probe {
             vm.foe.relics.append(card("watchtower"))
             vm.foe.deck = [CardLibrary.card(id: "sparrow")!]
             let before = vm.foe.hand.count
-            vm.attack(soldier, target: nil, on: .you)
+            await vm.attack(soldier, target: nil, on: .you)
             check("Watchtower draws for the DEFENDER", vm.foe.hand.count == before + 1)
         }
 
@@ -188,11 +191,11 @@ struct Probe {
             check("printed Shield starts up", kg.shield)
             let attacker = card("soldier", turn: 0)
             vm.foe.frontier.append(attacker); attacker.zone = .frontier; attacker.canAct = true
-            vm.attack(attacker, target: nil, on: .foe)
+            await vm.attack(attacker, target: nil, on: .foe)
             check("Shield absorbs the first hit", kg.damage == 0 && !kg.shield)
-            vm.endTurn(); vm.confirmHandoff()          // -> Player 2's turn
+            await vm.endTurn(); await vm.confirmHandoff()          // -> Player 2's turn
             check("Shield stays down during the opponent's turn", !kg.shield)
-            vm.endTurn(); vm.confirmHandoff()          // -> back to Player 1
+            await vm.endTurn(); await vm.confirmHandoff()          // -> back to Player 1
             check("Shield refreshes on its owner's turn", kg.shield)
         }
 
@@ -204,7 +207,7 @@ struct Probe {
             vm.you.frontier.append(locust); locust.zone = .frontier
             let human = card("craftsman")
             vm.foe.frontier.append(human); human.zone = .frontier
-            vm.sacrifice(locust, on: .you)
+            await vm.sacrifice(locust, on: .you)
             check("Locust cannot hit a Human in the Frontier", human.damage == 0)
 
             let vm2 = freshMatch()
@@ -212,7 +215,7 @@ struct Probe {
             vm2.you.frontier.append(locust2); locust2.zone = .frontier
             let beast = card("behemoth-calf")
             vm2.foe.frontier.append(beast); beast.zone = .frontier
-            vm2.sacrifice(locust2, on: .you)
+            await vm2.sacrifice(locust2, on: .you)
             check("Locust does hit a Creature", beast.damage == 1)
         }
 
@@ -225,7 +228,7 @@ struct Probe {
             physician.zone = .frontier; other.zone = .frontier
             other.damage = 3
             physician.damage = 99
-            poke(vm, .you)
+            await poke(vm, .you)
             check("Physician's Death heals other Frontier Humans", other.damage == 1, "got \(other.damage)")
         }
         do {
@@ -237,7 +240,7 @@ struct Probe {
             vm.foe.frontier.append(vulture); vulture.zone = .frontier
             vm.foe.deck = [CardLibrary.card(id: "sparrow")!]
             let before = vm.foe.hand.count
-            vm.sacrifice(serpent, on: .you)
+            await vm.sacrifice(serpent, on: .you)
             check("destroy() fires the victim's Death trigger", vm.foe.hand.count == before + 1)
         }
 
@@ -250,7 +253,7 @@ struct Probe {
             let moses = card("h_moses")
             vm.you.basecamp.append(moses); moses.zone = .basecamp
             vm.you.relics.append(card("fish-net"))
-            vm.sacrifice(kraken, on: .you)
+            await vm.sacrifice(kraken, on: .you)
             check("Kraken + Moses + Fish Net = (3+1)x2 = 8", vm.you.elements[.sea] == 8,
                   "got \(vm.you.elements[.sea] ?? -1)")
             check("sacrificed Creature is on the Altar", vm.you.altar.contains { $0 === kraken })
@@ -278,7 +281,7 @@ struct Probe {
             vm.you.frontier.append(crab); crab.zone = .frontier
             vm.you.elements = [.sea: 4, .land: 0, .air: 0]   // 1 surplus after the flood
             vm.you.altar.append(card("sparrow"))
-            vm.sacrifice(crab, on: .you)                     // +1 Sea -> 5 Sea
+            await vm.sacrifice(crab, on: .you)                     // +1 Sea -> 5 Sea
 
             check("Event 1 clears", vm.you.events[0].cleared)
             check("surplus carries over", vm.you.elements[.sea] == 2, "got \(vm.you.elements[.sea] ?? -1)")
@@ -295,7 +298,7 @@ struct Probe {
             let crab = card("tide-pool-crab")
             vm.you.frontier.append(crab); crab.zone = .frontier
             vm.you.elements = [.sea: 2, .land: 3, .air: 0]
-            vm.sacrifice(crab, on: .you)                     // +1 Sea -> 3 Sea, 3 Land
+            await vm.sacrifice(crab, on: .you)                     // +1 Sea -> 3 Sea, 3 Land
             check("clears cascade in one action",
                   vm.you.events[0].cleared && vm.you.events[1].cleared)
             check("Event 3 revealed to the clearing player", vm.you.events[2].revealed)
@@ -313,7 +316,7 @@ struct Probe {
             vm.you.frontier.append(crab); crab.zone = .frontier
             vm.you.basecamp.append(card("craftsman"))
             vm.you.elements = [.sea: 4, .land: 5, .air: 2]
-            vm.sacrifice(crab, on: .you)
+            await vm.sacrifice(crab, on: .you)
             check("clearing all three wins the match", vm.winner == .you, "winner=\(String(describing: vm.winner))")
         }
 
@@ -339,10 +342,10 @@ struct Probe {
             for c in vm.you.basecamp { c.zone = .basecamp }
             vm.you.deck = [CardLibrary.card(id: "sparrow")!, CardLibrary.card(id: "sparrow")!]
             var h = vm.you.hand.count
-            vm.march(herald, on: .you)
+            await vm.march(herald, on: .you)
             check("Herald draws on the first Human March", vm.you.hand.count == h + 1)
             h = vm.you.hand.count
-            vm.march(second, on: .you)
+            await vm.march(second, on: .you)
             check("Herald does not draw for the second", vm.you.hand.count == h)
         }
         do {
@@ -351,9 +354,9 @@ struct Probe {
             let crab = card("tide-pool-crab")                 // a Sea Creature in play
             vm.you.basecamp.append(contentsOf: [anchor, fisherman, crab])
             for c in vm.you.basecamp { c.zone = .basecamp }
-            vm.march(fisherman, on: .you)
+            await vm.march(fisherman, on: .you)
             check("Fisherman gains +1/+1 with a Sea Creature", fisherman.attack == 4 && fisherman.maxHealth == 4)
-            vm.endTurn()
+            await vm.endTurn()
             check("the buff expires at end of turn", fisherman.attack == 3 && fisherman.maxHealth == 3)
         }
         do {
@@ -362,8 +365,8 @@ struct Probe {
             vm.you.basecamp.append(contentsOf: [anchor, chief])
             for c in vm.you.basecamp { c.zone = .basecamp }
             let wall = card("leviathan"); vm.foe.frontier.append(wall); wall.zone = .frontier
-            vm.march(chief, on: .you)
-            vm.attack(chief, target: wall, on: .you)
+            await vm.march(chief, on: .you)
+            await vm.attack(chief, target: wall, on: .you)
             check("Warrior Chief's first attack is doubled", wall.damage == 12, "got \(wall.damage)")
         }
         do {
@@ -373,9 +376,9 @@ struct Probe {
             for c in vm.you.basecamp { c.zone = .basecamp }
             let blocker = card("leviathan"); vm.foe.frontier.append(blocker); blocker.zone = .frontier
             let g = card("h_goliath"); vm.foe.basecamp.append(g); g.zone = .basecamp
-            vm.march(eagle, on: .you)
+            await vm.march(eagle, on: .you)
             check("Eagle is marked unblockable", eagle.unblockable)
-            vm.attack(eagle, target: nil, on: .you)
+            await vm.attack(eagle, target: nil, on: .you)
             check("Eagle Raids past an occupied Frontier", g.damage == 3, "got \(g.damage)")
         }
 
@@ -388,7 +391,7 @@ struct Probe {
             for c in vm.you.basecamp { c.zone = .basecamp }
             priest.damage = 4
             let crab = card("tide-pool-crab"); vm.you.frontier.append(crab); crab.zone = .frontier
-            vm.sacrifice(crab, on: .you)
+            await vm.sacrifice(crab, on: .you)
             check("Farmer gains +1/+0 per Sacrifice", farmer.attack == 2, "got \(farmer.attack)")
             check("Priest heals to full on Sacrifice", priest.damage == 0)
         }
@@ -397,7 +400,7 @@ struct Probe {
             let hp = card("high-priest")
             vm.you.basecamp.append(hp); hp.zone = .basecamp
             let dove = card("dove"); vm.you.frontier.append(dove); dove.zone = .frontier
-            vm.sacrifice(dove, on: .you)
+            await vm.sacrifice(dove, on: .you)
             check("High Priest gains Shield when a Sacrifice targets it", hp.shield)
         }
         do {
@@ -405,9 +408,9 @@ struct Probe {
             let owl = card("owl"), h1 = card("soldier", turn: 0), h2 = card("centurion", turn: 0)
             vm.you.basecamp.append(contentsOf: [owl, h1, h2])
             for c in vm.you.basecamp { c.zone = .basecamp }
-            vm.march(h1, on: .you)
+            await vm.march(h1, on: .you)
             check("Owl shields the first Human to March", h1.shield)
-            vm.march(h2, on: .you)
+            await vm.march(h2, on: .you)
             check("Owl does not shield the second", !h2.shield)
         }
         do {
@@ -421,7 +424,7 @@ struct Probe {
             vm.you.deck = [CardLibrary.card(id: "sparrow")!]
             let crab = card("tide-pool-crab"); vm.you.frontier.append(crab); crab.zone = .frontier
             let before = vm.you.hand.count
-            vm.sacrifice(crab, on: .you)
+            await vm.sacrifice(crab, on: .you)
             check("Prophet draws when you overcome an Event", vm.you.hand.count == before + 1)
         }
 
@@ -432,7 +435,7 @@ struct Probe {
             let jackal = card("golden-jackal"), killer = card("leviathan")
             vm.you.frontier.append(jackal); jackal.zone = .frontier; jackal.canAct = true
             vm.foe.frontier.append(killer); killer.zone = .frontier
-            vm.attack(jackal, target: killer, on: .you)
+            await vm.attack(jackal, target: killer, on: .you)
             check("Golden Jackal dies to the Creature", vm.you.frontier.isEmpty)
             check("Golden Jackal bites its killer back", killer.damage == 4, "got \(killer.damage)")
         }
@@ -444,7 +447,7 @@ struct Probe {
             vm.foe.frontier.append(contentsOf: [beast, human])
             for c in vm.foe.frontier { c.zone = .frontier }
             samson.damage = 99
-            poke(vm, .you)
+            await poke(vm, .you)
             check("Samson hits Frontier Creatures", beast.damage == 3, "got \(beast.damage)")
             check("Samson spares Humans", human.damage == 0, "got \(human.damage)")
         }
@@ -457,7 +460,7 @@ struct Probe {
             hurt.damage = 1
             vm.foe.frontier.append(contentsOf: [healthy, hurt])
             for c in vm.foe.frontier { c.zone = .frontier }
-            vm.play(jael, on: .you)
+            await vm.play(jael, on: .you)
             check("Jael destroys only a damaged Creature",
                   vm.foe.frontier.contains { $0 === healthy } && !vm.foe.frontier.contains { $0 === hurt })
         }
@@ -481,7 +484,7 @@ struct Probe {
             let watchman = card("watchman")
             vm.you.hand.append(watchman)
             let before = vm.you.hand.count
-            vm.play(watchman, on: .you)
+            await vm.play(watchman, on: .you)
             check("Scroll of Wisdom draws for a Wisdom Human",
                   vm.you.hand.count == before, "played -1, drew +1; got \(vm.you.hand.count) vs \(before)")
 
@@ -493,7 +496,7 @@ struct Probe {
             let esther = card("h_esther")         // Courage, vanilla besides Shield
             vmC.you.hand.append(esther)
             let beforeC = vmC.you.hand.count
-            vmC.play(esther, on: .you)
+            await vmC.play(esther, on: .you)
             check("Scroll of Wisdom ignores non-Wisdom Humans", vmC.you.hand.count == beforeC - 1)
         }
         do {
@@ -504,9 +507,13 @@ struct Probe {
             vm.you.basecamp[0].zone = .basecamp
             let soldierless = card("h_esther")                 // Courage, no printed Charge
             vm.you.hand.append(soldierless)
-            vm.play(soldierless, on: .you)
+            await vm.play(soldierless, on: .you)
             check("Banner of Courage grants Charge", vm.canMarch(soldierless, on: .you))
-            check("Banner of Courage grants +1/+0", soldierless.attack == 3, "got \(soldierless.attack)")
+            // Derived from the card, not hardcoded — this asserts that Banner adds 1,
+            // so rebalancing Esther can never break it. See the note in PROJECT_STATUS.
+            let printedAttack = CardLibrary.card(id: "h_esther")!.attack
+            check("Banner of Courage grants +1/+0", soldierless.attack == printedAttack + 1,
+                  "got \(soldierless.attack), expected \(printedAttack + 1)")
         }
 
         // ─────────────────────────────────────────────────────────────
@@ -517,7 +524,7 @@ struct Probe {
             vm.you.frontier.append(sparrow); sparrow.zone = .frontier
             vm.you.deck = [CardLibrary.card(id: "lion")!]
             let before = vm.you.hand.count
-            vm.sacrifice(sparrow, on: .you)
+            await vm.sacrifice(sparrow, on: .you)
             check("Sparrow draws on Sacrifice", vm.you.hand.count == before + 1)
         }
         do {
@@ -526,7 +533,7 @@ struct Probe {
             vm.you.frontier.append(otter); otter.zone = .frontier
             let deadHuman = card("craftsman")
             vm.you.discard.append(deadHuman)
-            vm.sacrifice(otter, on: .you)
+            await vm.sacrifice(otter, on: .you)
             check("River Otter returns a Human from discard", vm.you.hand.contains { $0 === deadHuman })
         }
 

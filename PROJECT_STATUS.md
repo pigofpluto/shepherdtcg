@@ -1,6 +1,6 @@
 # Project Status
 
-**Last updated:** 2026-07-26
+**Last updated:** 2026-07-28
 
 Bible TCG — a 2-player hot-seat trading card game. Race to the Promised Land by
 overcoming 3 Events. iOS 17+, SwiftUI, generated with xcodegen.
@@ -107,11 +107,16 @@ what it says.
 | `Models/MatchModels.swift` | Rewritten. Layered stats, Altar zone, berries, per-turn counters, Event unlock helpers. |
 | `Services/CardLibrary.swift` | 87 cards (25 Creatures, 44 Humans, 8 Relics, 10 Events). All text follows the canon. |
 | `ViewModels/MatchViewModel.swift` | Rewritten. Full turn loop, berries, auras, all triggers. |
-| `Views/TCGMatchView.swift` | Play/Eat action bar on hand cards, Altar counter, 3-badge event column, berry readout. |
+| `Views/TCGMatchView.swift` | Rewritten for Playmat V4. Positions come from `MatLayout`; every card carries `matchedGeometryEffect`. |
+| `Views/MatLayout.swift` | New. The single table of board positions, in mat fractions. |
+| `Views/MiniCard.swift` | New. Extracted from `TCGMatchView`; animates its own stat changes. |
+| `Views/BoardStacks.swift` | New. Deck / Discard / Altar piles. |
+| `Views/CueOverlay.swift` | New. Floating damage, heal, points, shield-break. |
+| `Views/DebugSandbox.swift` | New, `#if DEBUG`. Stacked board for checking animation by eye. |
 | `Views/TCGCardView.swift` | Unchanged behaviour; rename fallout only. |
 | `Views/CardCollectionView.swift` | Unchanged behaviour; rename fallout only. |
 | `Resources/` | Rules + cards.json are canon. **Not bundled** — design docs only, not loaded at runtime. |
-| `Tests/` | New. 77 headless engine checks. |
+| `Tests/` | 77 headless engine checks, now `async`. |
 | `import-art.py` | Now knows all 87 ids (the 3 discipline Relics were missing). |
 
 ---
@@ -180,94 +185,115 @@ Raven — were resolved **in favour of the Swift version**, since that's what ru
   specified in `cards.json` but not implemented; `canMarch` just blocks.
 - Long ability text clips on the card frame — Great Fish overruns its 4-line
   limit into the attack pip. Layout constraint in `TCGCardView.framedFace`.
-- The playmat art has **5** printed Event slots; the sequential-Event change
-  means only **3** badges are rendered (foe's current, shared Event 3, yours).
-  The mat art should eventually be redrawn to match.
 - Opening hand size (3, plus the turn-1 draw) is not specified anywhere.
 - No deck builder — decks are 28 random distinct bodies + 2 random Relics.
 - No AI opponent (removed earlier in favour of hot-seat).
 - Cards have no flavour text or scripture references.
-- **The project is not under version control.** `git init` would be worth doing
-  before the next round of changes.
 - 21 of 87 cards have art. Drop files into `Art/Cards/` and run
   `python3 import-art.py` — it reports what's still missing.
 
 ---
 
-## Next: movement & animation
+## Movement & animation — done
 
-Notes for whoever picks up board movement and card animation. Four things about
-the current architecture will shape the approach — the first two are obstacles,
-the last two are already in your favour.
+The board no longer snaps. Effects resolve as a visible sequence, and the layout
+was retargeted to `playmat v4.jpg` in the same pass (animations need real
+destinations, and V3/V4 is the first layout that prints one for every zone).
 
-### 1. Board state is invisible to SwiftUI
+### 1. The engine pauses — `MatchViewModel`
 
-`PlayerBoard` and `CardInstance` are plain `final class` — **not**
-`ObservableObject`, no `@Published` anywhere. The only observable state on
-`MatchViewModel` is six properties (`turnSide`, `turnNumber`, `winner`, `log`,
-`selected`, `awaitingHandoff`). Everything else — hands, zones, stats, damage —
-refreshes solely because `settle()` calls `bump()` → `objectWillChange.send()`.
+`play`, `march`, `attack`, `sacrifice`, `eat`, `endTurn`, `confirmHandoff`,
+`beginTurn` and `settle` are **`async`**. They stop at each moment worth seeing:
 
-SwiftUI cannot diff reference-type mutations, so `withAnimation` has nothing to
-interpolate: stat changes and zone moves will keep snapping no matter how they're
-wrapped. Fixing this is the prerequisite for everything else. Options, cheapest first:
+```swift
+private func beat(_ ms: UInt64 = 280) async {
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) { bump() }
+    guard !instant else { return }
+    try? await Task.sleep(nanoseconds: ms * 1_000_000)
+}
+```
 
-- Give `MiniCard` explicit `.animation(_, value:)` on the specific values it
-  draws (attack, health, shield), so each card animates its own changes.
-- Make `CardInstance` an `@Observable` (or `ObservableObject`) and observe it per
-  card view.
-- Move zone arrays onto the view model as `@Published`. Largest change; also the
-  most conventional.
+The board stays the single source of truth — there is no second copy of game
+state to drift. `settle()`'s fixpoint loop became the death-cascade sequencer:
+one wave per pass, each with its own beats, so "Locust stings X → X dies → Y
+loses Elder's aura → Y dies" plays as separate steps.
 
-### 2. Effects resolve to a fixpoint before the view ever sees them
+Two flags support it:
 
-`settle()` runs auras → deaths → repeat until stable, *then* bumps once. A chain
-like "Locust stings X → X dies → Y loses Elder's aura → Y dies" collapses into a
-single frame. Sequenced, beat-by-beat animation needs the engine to emit a
-**timeline of events**, not just a final state.
+- **`busy`** — published, set for the duration of an action. Every `can…` guard
+  reads it, so input is locked mid-animation and taps can't interleave. Views
+  call `Task { await vm.play(…) }`.
+- **`instant`** — skips the sleeps. `Tests/EngineProbe.swift` sets it, so the
+  77 checks still run in ~0.02s.
 
-The hook already half-exists: `note()` appends to `log` in resolution order, so
-there's an ordered record of everything that happened — it's just `[String]`.
-Promoting it to a structured enum (`.moved(card, from:to:)`, `.damaged(card, n)`,
-`.died(card)`, `.pointsGained(element, n)`) would give the animation layer a queue
-to play through, and the log strings could be derived from it so nothing is lost.
+`init` can't await, so `setup()` calls `beginTurnState` + `settleInstantly()`
+for turn 1. Those are the pause-free halves of `beginTurn` / `settle`.
 
-### 3. Card identity is already stable — use it
+### 2. Cues — the transient channel
 
-Every `ForEach` keys off `id: \.element.id`, a `UUID` that lives on the
-`CardInstance` for its whole lifetime. That's exactly what `matchedGeometryEffect`
-needs.
+Board state records that a card took 3 damage; it can't record that a red `−3`
+should float off it. `VisualCue` (in `MatchModels.swift`) is a published,
+self-expiring list tagged by card `UUID`, emitted from the chokepoints that
+already existed — `deal()`, `destroy()`, `heal`, `grantShield`, `sacrificeValue`.
 
-Worth knowing: hand, Basecamp, Frontier and Relics are **four separate `ForEach`
-loops**, so a card Marching from Basecamp to Frontier is destroyed in one and
-created in the other. That's the textbook `matchedGeometryEffect` case rather
-than a problem — pair them on the shared `UUID` in a common namespace.
+Deliberately narrower than promoting `note()` to a structured enum: it does the
+animation job, and `note()` still writes the readable log untouched.
 
-### 4. Positions are already absolute and animatable
+### 3. Positions — `MatLayout`
 
-`board(in:)` computes an aspect-fit rect for the playmat, then places everything
-via a `pt(fx, fy)` helper that maps mat-relative fractions to points, applied with
-`.position()` inside a `ZStack`. `.position` interpolates cleanly under
-`withAnimation` — no layout container is fighting you, and the fraction system
-means animations stay correct across device sizes.
+One table of slot rects in mat fractions, measured off the playmat art
+(`playmat v4.jpg`, 4096 × 2240, aspect **1.829** — same layout and aspect as the
+v3 mock it replaced, so only the Relic slots needed re-measuring, since V4 prints
+them slightly staggered rather than level). `MatLayout.Frame` aspect-fits once and
+converts fractions to points. Card size derives from the printed slot.
 
-### Zones with no view to animate to
+Measure against the **art**, not `shepherd playmat v1.pdf` — the wireframe is
+aspect 1.62 and its geometry does not transfer.
 
-Deck, discard and Altar are rendered as **text counters only**
-(`counter("\(vm.you.altar.count)")`), and the opponent's hand is just
-"N cards hidden". So "card flies to the Altar", draw animations, and
-discard animations have no destination or source view yet — those need real
-(even if face-down) card views placed at those mat positions first.
+Fixed along the way, all previously wrong on the board: the foe's Altar was
+never drawn, both discards were summed into one number, only your element
+counters showed, and two of the five printed Event slots went unused. The
+column now reads foe 1·2 / shared 3 / your 2·1.
 
-Also note the playmat art has **5** printed Event slots but the sequential-Event
-change means only 3 badges render; if the mat gets redrawn, that's the moment to
-add proper Altar and deck card stacks too.
+### 4. Views
 
-### Suggested order
+`matchedGeometryEffect` on a namespace shared by every zone, keyed on the
+`CardInstance.id` that `ForEach` already used. Deck, Discard and Altar became
+real card stacks (`BoardStacks.swift`) — they were bare text counters, so
+draw, death and Sacrifice animations had nowhere to fly. `MiniCard` animates its
+own attack/health/shield. The END rock on the mat is the end-turn button.
 
-1. Structured events from `note()` — unlocks sequencing.
-2. Per-card observability (option 1 or 2 above) — makes stat changes animate.
-3. `matchedGeometryEffect` for Basecamp ⇄ Frontier moves.
-4. Real card views for deck / discard / Altar, then draw and sacrifice animations.
-5. Attack/Raid choreography (lunge, damage numbers, death fade) last — it depends
-   on all of the above.
+Chrome lives in the letterbox margin; the match log rides the printed "Frontier"
+divider, the one band that never holds a card, and steps aside for the action bar.
+
+### Checking it by eye
+
+Reaching combat in a real match takes seven turns of ramping berries. Instead:
+
+```bash
+xcrun simctl launch --terminate-running-process booted com.bibletcg.app --sandbox
+```
+
+`DebugSandbox` stacks both boards, gives 8 mana, and leaves an Event one
+Sacrifice from clearing. `#if DEBUG` and opt-in — a normal launch is unaffected.
+
+### Verified
+
+Probe 77/77. On Playmat V3 in the simulator: eat, play, attack-and-kill, Sacrifice → Altar,
+Event clear → Altar sweep → badge stamp → next Event revealed, and Elder's aura
+applying to a Frontier Human. The aura *cascade* is covered by the probe
+("aura retracts and kills the dependent card") rather than watched.
+
+### Known gaps
+
+- **No skip button**, by choice. If chains start to drag, it's one flag on `beat()`.
+- **Rotation is fragile.** `requestOrientation` relies on
+  `requestGeometryUpdate`, which iOS may simply refuse — it is *always* refused on
+  iPad (the rotate hint blocks play there), and it stopped landing on the iPhone
+  simulator mid-session with unchanged code. When it fails the game is
+  unreachable. The durable fix is to stop depending on the device rotating and
+  rotate the board content instead; the cheap one is `UIRequiresFullScreen`,
+  which costs iPad multitasking.
+- Opening hand appears rather than being dealt — `init` can't await.
+- Draw animations rely on the card appearing in hand; the Deck stack is drawn
+  from a count, since the deck holds `[TCGCard]` and not live instances.

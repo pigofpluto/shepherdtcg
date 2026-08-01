@@ -1,15 +1,20 @@
 import SwiftUI
 import UIKit
 
-/// Landscape match board laid out on the Playmat V2 template.
+/// Landscape match board laid out on the Playmat V3 template.
 /// Tap a hand card to play it; tap a Camp/Frontier card for its actions.
+///
+/// Every position comes from `MatLayout`, and every card carries a
+/// `matchedGeometryEffect` keyed on its `CardInstance.id`, so a card moving
+/// between zones slides instead of disappearing and reappearing. The engine
+/// pauses between steps (see `MatchViewModel.beat`), which is what gives the
+/// board time to show each one.
 struct TCGMatchView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = MatchViewModel()
     @State private var chosen: CardInstance?
-
-    /// Native aspect of Playmat V2 (2286 × 1274).
-    private let matAspect: CGFloat = 2286.0 / 1274.0
+    /// Shared by every zone so cards can fly between them.
+    @Namespace private var cardNS
 
     var body: some View {
         GeometryReader { geo in
@@ -20,9 +25,14 @@ struct TCGMatchView: View {
                 if portrait {
                     rotateHint
                 } else {
-                    board(in: geo.size)
+                    let f = MatLayout.Frame(in: geo.size)
+                    board(f)
+                    logLine(f)
+                    CueOverlay(cues: vm.cues,
+                               anchor: { cueAnchor($0, f) },
+                               scale: f.size.height)
                     controls
-                    if let c = chosen { actionBar(for: c, in: geo.size) }
+                    if let c = chosen, !vm.busy { actionBar(for: c, in: geo.size) }
                     if vm.awaitingHandoff, vm.winner == nil { handoffOverlay }
                     if let w = vm.winner { resultOverlay(winner: w) }
                 }
@@ -31,6 +41,8 @@ struct TCGMatchView: View {
         .statusBarHidden()
         .onAppear { requestOrientation(.landscape) }
         .onDisappear { requestOrientation(.portrait) }
+        // A locked board can't have a live selection.
+        .onChange(of: vm.busy) { _, busy in if busy { chosen = nil } }
     }
 
     private var rotateHint: some View {
@@ -45,195 +57,286 @@ struct TCGMatchView: View {
 
     // MARK: Board
 
-    private func board(in size: CGSize) -> some View {
-        // Aspect-fit the mat, then place everything as fractions of that rect.
-        var mw = size.width, mh = size.width / matAspect
-        if mh > size.height { mh = size.height; mw = size.height * matAspect }
-        let ox = (size.width - mw) / 2, oy = (size.height - mh) / 2
-        let cardW = mw * 0.082, cardH = mh * 0.19
-
-        func pt(_ fx: CGFloat, _ fy: CGFloat) -> CGPoint { CGPoint(x: ox + fx * mw, y: oy + fy * mh) }
-
-        return ZStack {
+    private func board(_ f: MatLayout.Frame) -> some View {
+        ZStack {
             Image("playmat").resizable().scaledToFit()
-                .frame(width: mw, height: mh).position(x: ox + mw / 2, y: oy + mh / 2)
+                .frame(width: f.size.width, height: f.size.height)
+                .position(x: f.origin.x + f.size.width / 2, y: f.origin.y + f.size.height / 2)
 
-            // ── Camps (4 slots each; slot 1 = Guardian) ──
-            ForEach(Array(vm.foe.basecamp.prefix(4).enumerated()), id: \.element.id) { i, c in
-                card(c, side: .foe, w: cardW, h: cardH)
-                    .position(campPoint(i, mine: false, pt: pt))
-            }
-            ForEach(Array(vm.you.basecamp.prefix(4).enumerated()), id: \.element.id) { i, c in
-                card(c, side: .you, w: cardW, h: cardH, guardian: i == 0)
-                    .position(campPoint(i, mine: true, pt: pt))
-            }
-
-            // ── Frontiers ──
-            ForEach(Array(vm.foe.frontier.prefix(5).enumerated()), id: \.element.id) { i, c in
-                card(c, side: .foe, w: cardW, h: cardH)
-                    .position(frontierPoint(i, count: vm.foe.frontier.count, y: 0.33, pt: pt))
-            }
-            ForEach(Array(vm.you.frontier.prefix(5).enumerated()), id: \.element.id) { i, c in
-                card(c, side: .you, w: cardW, h: cardH)
-                    .position(frontierPoint(i, count: vm.you.frontier.count, y: 0.68, pt: pt))
+            ForEach([PlayerSide.foe, .you], id: \.self) { side in
+                piles(side, f)
+                camp(side, f)
+                frontier(side, f)
+                relics(side, f)
+                hand(side, f)
+                readouts(side, f)
             }
 
-            // ── Relics ──
-            ForEach(Array(vm.foe.relics.prefix(2).enumerated()), id: \.element.id) { i, c in
-                card(c, side: .foe, w: cardW * 0.9, h: cardH * 0.8)
-                    .position(pt(i == 0 ? 0.388 : 0.460, 0.13))
-            }
-            ForEach(Array(vm.you.relics.prefix(2).enumerated()), id: \.element.id) { i, c in
-                card(c, side: .you, w: cardW * 0.9, h: cardH * 0.8)
-                    .position(pt(i == 0 ? 0.388 : 0.460, 0.865))
-            }
-
-            // ── Hands ── only the ACTIVE player's hand is face-up (hot seat).
-            if !vm.awaitingHandoff {
-                handStrip(cards: vm.activeBoard.hand, w: cardW, h: cardH, pt: pt)
-            }
-            counter("\(vm.inactiveBoard.hand.count) cards hidden", pt(0.663, 0.115), mh)
-
-            // ── Deck / discard / altar / mana ──
-            counter("\(vm.foe.deck.count)", pt(0.056, 0.26), mh)
-            counter("\(vm.you.discard.count + vm.foe.discard.count)", pt(0.056, 0.50), mh)
-            counter("\(vm.you.deck.count)", pt(0.056, 0.72), mh)
-            manaHex("\(vm.foe.mana)/\(vm.foe.berries)", pt(0.055, 0.09), mh)
-            manaHex("\(vm.you.mana)/\(vm.you.berries)", pt(0.055, 0.906), mh)
-            counter("\(vm.you.altar.count)", pt(0.757, 0.49), mh)
-
-            // ── Events column ── one Event at a time per player, plus the
-            // shared finale in the middle (a `?` until someone unlocks it).
-            eventBadge(currentEvent(vm.foe), pt(0.888, 0.20), mh)
-            eventBadge(vm.you.events.count > 2 ? vm.you.events[2] : nil, pt(0.888, 0.50), mh)
-            eventBadge(currentEvent(vm.you), pt(0.888, 0.80), mh)
-
-            // ── Element counters (Air · Land · Sea) ──
-            counter("\(vm.you.elements[.air] ?? 0)", pt(0.845, 0.937), mh)
-            counter("\(vm.you.elements[.land] ?? 0)", pt(0.900, 0.937), mh)
-            counter("\(vm.you.elements[.sea] ?? 0)", pt(0.955, 0.937), mh)
+            events(f)
+            endRock(f)
         }
     }
 
-    /// The Event this player is currently racing, unless it's the shared finale
-    /// (which gets its own badge in the middle of the column).
-    private func currentEvent(_ b: PlayerBoard) -> EventProgress? {
-        guard let i = b.currentEventIndex, i < 2 else { return nil }
-        return b.events[i]
+    /// Deck, Discard and Altar — the destinations that make draw, death and
+    /// Sacrifice animations possible.
+    @ViewBuilder
+    private func piles(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
+        let b = vm.board(side)
+
+        DeckStack(count: b.deck.count, size: f.card)
+            .position(f.point(.deck, side))
+
+        CardStack(cards: b.discard, size: f.card, namespace: cardNS)
+            .position(f.point(.discard, side))
+
+        AltarStack(cards: b.altar, size: f.card, namespace: cardNS)
+            .position(f.point(.altar, side))
     }
 
-    private func campPoint(_ i: Int, mine: Bool, pt: (CGFloat, CGFloat) -> CGPoint) -> CGPoint {
-        let xs: [CGFloat] = [0.178, 0.276, 0.178, 0.276]
-        let ys: [CGFloat] = mine ? [0.62, 0.62, 0.80, 0.80] : [0.16, 0.16, 0.39, 0.39]
-        return pt(xs[i], ys[i])
-    }
-
-    private func frontierPoint(_ i: Int, count: Int, y: CGFloat, pt: (CGFloat, CGFloat) -> CGPoint) -> CGPoint {
-        let spacing: CGFloat = 0.088
-        let mid = CGFloat(count - 1) / 2
-        return pt(0.52 + (CGFloat(i) - mid) * spacing, y)
-    }
-
-    private func handStrip(cards: [CardInstance], w: CGFloat, h: CGFloat,
-                           pt: @escaping (CGFloat, CGFloat) -> CGPoint) -> some View {
-        let spacing: CGFloat = min(0.072, 0.28 / CGFloat(max(cards.count, 1)))
-        let mid = CGFloat(cards.count - 1) / 2
-        return ForEach(Array(cards.enumerated()), id: \.element.id) { i, c in
-            MiniCard(inst: c, w: w, h: h, showCost: true,
-                     cost: vm.effectiveCost(c.card, for: vm.activeBoard),
-                     selected: chosen?.id == c.id,
-                     playable: vm.canPlay(c, on: vm.turnSide))
-                // Tap to select — the action bar offers Play or Eat.
-                .onTapGesture { chosen = (chosen?.id == c.id) ? nil : c }
-                .position(pt(0.665 + (CGFloat(i) - mid) * spacing, 0.897))
+    @ViewBuilder
+    private func camp(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
+        let b = vm.board(side)
+        ForEach(Array(b.basecamp.prefix(4).enumerated()), id: \.element.id) { i, c in
+            card(c, side: side, size: f.card, guardian: i == 0)
+                .position(f.point(.camp(i), side))
         }
     }
 
     @ViewBuilder
-    private func card(_ inst: CardInstance, side: PlayerSide, w: CGFloat, h: CGFloat,
+    private func frontier(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
+        let b = vm.board(side)
+        ForEach(Array(b.frontier.prefix(5).enumerated()), id: \.element.id) { i, c in
+            card(c, side: side, size: f.card)
+                .offset(lungeOffset(for: c, f))
+                .position(f.point(MatLayout.frontierCenter(i, of: b.frontier.count, for: side)))
+        }
+    }
+
+    @ViewBuilder
+    private func relics(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
+        let b = vm.board(side)
+        ForEach(Array(b.relics.prefix(2).enumerated()), id: \.element.id) { i, c in
+            card(c, side: side, size: f.relicCard)
+                .position(f.point(.relic(i), side))
+        }
+    }
+
+    /// Only the active player's hand is face-up — this is a hot-seat game.
+    @ViewBuilder
+    private func hand(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
+        let b = vm.board(side)
+        let open = side == vm.turnSide && !vm.awaitingHandoff
+        ForEach(Array(b.hand.enumerated()), id: \.element.id) { i, c in
+            MiniCard(inst: c, w: f.card.width, h: f.card.height,
+                     showCost: open,
+                     cost: open ? vm.effectiveCost(c.card, for: b) : nil,
+                     selected: chosen?.id == c.id,
+                     playable: open && vm.canPlay(c, on: side),
+                     faceDown: !open,
+                     dying: isDying(c))
+                .matchedGeometryEffect(id: c.id, in: cardNS)
+                .onTapGesture { if open { chosen = (chosen?.id == c.id) ? nil : c } }
+                .position(f.point(MatLayout.handCenter(i, of: b.hand.count, for: side)))
+        }
+    }
+
+    /// Mana / berries beside the Frontier, plus the three element counters.
+    @ViewBuilder
+    private func readouts(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
+        let b = vm.board(side)
+        manaHex("\(b.mana)/\(b.berries)", f.point(.mana, side), f)
+        ForEach([Element.air, .land, .sea], id: \.self) { e in
+            counter("\(b.elements[e] ?? 0)", f.point(.element(e), side), f)
+        }
+    }
+
+    /// Five printed slots: foe 1·2 down the top, the shared finale in the
+    /// middle, your 2·1 along the bottom.
+    @ViewBuilder
+    private func events(_ f: MatLayout.Frame) -> some View {
+        ForEach([PlayerSide.foe, .you], id: \.self) { side in
+            let b = vm.board(side)
+            ForEach(0..<2, id: \.self) { i in
+                if b.events.indices.contains(i) {
+                    eventBadge(b.events[i], f.point(.event(i), side), f)
+                }
+            }
+        }
+        if vm.you.events.count > 2 {
+            eventBadge(vm.you.events[2], f.point(.event(2), .you), f)
+        }
+    }
+
+    /// The END rock on the mat is the end-turn button.
+    private func endRock(_ f: MatLayout.Frame) -> some View {
+        let live = vm.winner == nil && !vm.awaitingHandoff && !vm.busy
+        return Button {
+            Task { await vm.endTurn() }
+            chosen = nil
+        } label: {
+            RoundedRectangle(cornerRadius: f.scaled(0.02), style: .continuous)
+                .fill(Theme.sage.opacity(live ? 0.28 : 0))
+                .overlay(RoundedRectangle(cornerRadius: f.scaled(0.02))
+                    .strokeBorder(Theme.gold.opacity(live ? 0.85 : 0), lineWidth: 2))
+                .frame(width: f.size.width * 0.085, height: f.size.height * 0.17)
+        }
+        .disabled(!live)
+        .position(f.point(.end, .you))
+    }
+
+    @ViewBuilder
+    private func card(_ inst: CardInstance, side: PlayerSide, size: CGSize,
                       guardian: Bool = false) -> some View {
-        MiniCard(inst: inst, w: w, h: h, selected: chosen?.id == inst.id, guardian: guardian)
+        MiniCard(inst: inst, w: size.width, h: size.height,
+                 selected: chosen?.id == inst.id, guardian: guardian,
+                 dying: isDying(inst))
+            .matchedGeometryEffect(id: inst.id, in: cardNS)
             .onTapGesture { tap(inst, side: side) }
+    }
+
+    // MARK: Animation support
+
+    /// A card the engine has marked for death this beat.
+    private func isDying(_ inst: CardInstance) -> Bool {
+        vm.cues.contains { $0.card == inst.id && $0.isDeath }
+    }
+
+    /// While an attack is in flight the attacker leans a third of the way
+    /// toward whatever it's hitting.
+    private func lungeOffset(for inst: CardInstance, _ f: MatLayout.Frame) -> CGSize {
+        guard let l = vm.lunge, l.attacker == inst.id,
+              let from = position(of: inst.id, f),
+              let target = l.target, let to = position(of: target, f) else { return .zero }
+        return CGSize(width: (to.x - from.x) * 0.33, height: (to.y - from.y) * 0.33)
+    }
+
+    /// Where a card currently sits on the mat, whichever zone it's in.
+    private func position(of id: UUID, _ f: MatLayout.Frame) -> CGPoint? {
+        for side in [PlayerSide.you, .foe] {
+            let b = vm.board(side)
+            if let i = b.basecamp.firstIndex(where: { $0.id == id }) {
+                return f.point(.camp(min(i, 3)), side)
+            }
+            if let i = b.frontier.firstIndex(where: { $0.id == id }) {
+                return f.point(MatLayout.frontierCenter(i, of: b.frontier.count, for: side))
+            }
+            if let i = b.relics.firstIndex(where: { $0.id == id }) {
+                return f.point(.relic(min(i, 1)), side)
+            }
+            if let i = b.hand.firstIndex(where: { $0.id == id }) {
+                return f.point(MatLayout.handCenter(i, of: b.hand.count, for: side))
+            }
+            if b.altar.contains(where: { $0.id == id }) { return f.point(.altar, side) }
+            if b.discard.contains(where: { $0.id == id }) { return f.point(.discard, side) }
+        }
+        return nil
+    }
+
+    /// Card-tagged cues sit on their card; board-level ones sit on the counter
+    /// they affect.
+    private func cueAnchor(_ cue: VisualCue, _ f: MatLayout.Frame) -> CGPoint? {
+        if let id = cue.card { return position(of: id, f) }
+        switch cue.kind {
+        case .points(let e, _): return f.point(.element(e), cue.side)
+        case .berry:            return f.point(.mana, cue.side)
+        default:                return nil
+        }
     }
 
     // MARK: Small board widgets
 
-    private func counter(_ text: String, _ p: CGPoint, _ mh: CGFloat) -> some View {
+    private func counter(_ text: String, _ p: CGPoint, _ f: MatLayout.Frame) -> some View {
         Text(text)
-            .font(.system(size: mh * 0.032, weight: .bold, design: .rounded))
+            .font(.system(size: f.scaled(0.036), weight: .bold, design: .rounded))
             .foregroundStyle(.white)
-            .padding(.horizontal, mh * 0.016).padding(.vertical, mh * 0.008)
-            .background(Color.black.opacity(0.45), in: Capsule())
+            .contentTransition(.numericText())
+            .padding(.horizontal, f.scaled(0.014)).padding(.vertical, f.scaled(0.006))
+            .background(Color.black.opacity(0.5), in: Capsule())
             .position(p)
     }
 
-    private func manaHex(_ text: String, _ p: CGPoint, _ mh: CGFloat) -> some View {
+    private func manaHex(_ text: String, _ p: CGPoint, _ f: MatLayout.Frame) -> some View {
         Text(text)
-            .font(.system(size: mh * 0.038, weight: .black, design: .rounded))
+            .font(.system(size: f.scaled(0.045), weight: .black, design: .rounded))
             .foregroundStyle(.white)
-            .padding(.horizontal, mh * 0.02).padding(.vertical, mh * 0.008)
-            .background(Color(red: 0.20, green: 0.45, blue: 0.72).opacity(0.9), in: Capsule())
+            .contentTransition(.numericText())
+            .padding(.horizontal, f.scaled(0.02)).padding(.vertical, f.scaled(0.008))
+            .background(Color(red: 0.10, green: 0.35, blue: 0.60).opacity(0.85), in: Capsule())
             .position(p)
     }
 
     @ViewBuilder
-    private func eventBadge(_ ev: EventProgress?, _ p: CGPoint, _ mh: CGFloat) -> some View {
-        if let ev {
-            HStack(spacing: mh * 0.008) {
-                if ev.cleared {
-                    Image(systemName: "checkmark.seal.fill").foregroundStyle(Theme.sage)
-                        .font(.system(size: mh * 0.05))
-                } else if !ev.revealed {
-                    Image(systemName: "questionmark.circle.fill").foregroundStyle(.white.opacity(0.7))
-                        .font(.system(size: mh * 0.05))
-                } else {
-                    ForEach(Array(ev.card.requirement.enumerated()), id: \.offset) { _, r in
-                        HStack(spacing: 0) {
-                            Image(systemName: r.element.icon).font(.system(size: mh * 0.026))
-                            Text("\(r.count)").font(.system(size: mh * 0.03, weight: .heavy))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, mh * 0.01).padding(.vertical, mh * 0.004)
-                        .background(r.element.color.opacity(0.95), in: Capsule())
+    private func eventBadge(_ ev: EventProgress, _ p: CGPoint, _ f: MatLayout.Frame) -> some View {
+        HStack(spacing: f.scaled(0.008)) {
+            if ev.cleared {
+                Image(systemName: "checkmark.seal.fill").foregroundStyle(Theme.sage)
+                    .font(.system(size: f.scaled(0.055)))
+            } else if !ev.revealed {
+                Image(systemName: "questionmark.circle.fill").foregroundStyle(.white.opacity(0.7))
+                    .font(.system(size: f.scaled(0.055)))
+            } else {
+                ForEach(Array(ev.card.requirement.enumerated()), id: \.offset) { _, r in
+                    HStack(spacing: 0) {
+                        Image(systemName: r.element.icon).font(.system(size: f.scaled(0.026)))
+                        Text("\(r.count)").font(.system(size: f.scaled(0.032), weight: .heavy))
                     }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, f.scaled(0.010)).padding(.vertical, f.scaled(0.004))
+                    .background(r.element.color.opacity(0.95), in: Capsule())
                 }
             }
-            .padding(.horizontal, mh * 0.01).padding(.vertical, mh * 0.006)
-            .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: mh * 0.02))
-            .position(p)
         }
+        .padding(.horizontal, f.scaled(0.010)).padding(.vertical, f.scaled(0.006))
+        .background(Color.black.opacity(0.34), in: RoundedRectangle(cornerRadius: f.scaled(0.02)))
+        .scaleEffect(ev.cleared ? 1.0 : 1.0)
+        .animation(.spring(response: 0.4, dampingFraction: 0.6), value: ev.cleared)
+        .position(p)
     }
 
     // MARK: Controls / actions
 
+    /// The mat is aspect-fit, so it letterboxes at the sides in landscape.
+    /// Chrome lives in that margin — anything placed over the mat itself covers
+    /// a printed slot (the turn pill used to sit on the foe's element counters,
+    /// and the log line on your deck count).
     private var controls: some View {
-        VStack {
-            HStack {
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill").font(.title2)
-                        .foregroundStyle(.white.opacity(0.8)).shadow(radius: 3)
+        VStack(spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill").font(.title2)
+                            .foregroundStyle(.white.opacity(0.8)).shadow(radius: 3)
+                    }
+                    Text("\(vm.name(of: vm.turnSide))\nTurn \(vm.turnNumber)")
+                        .font(.caption2.bold()).multilineTextAlignment(.center)
+                        .foregroundStyle(.white).padding(.horizontal, 7).padding(.vertical, 5)
+                        .background((vm.turnSide == .you ? Theme.sage : Theme.clay).opacity(0.92),
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 Spacer()
-                Text("\(vm.name(of: vm.turnSide)) · Turn \(vm.turnNumber)").font(.caption.bold())
-                    .foregroundStyle(.white).padding(.horizontal, 10).padding(.vertical, 5)
-                    .background((vm.turnSide == .you ? Theme.sage : Theme.clay).opacity(0.9), in: Capsule())
-                Button { vm.endTurn(); chosen = nil } label: {
-                    Text("End Turn").font(.subheadline.bold())
-                        .padding(.horizontal, 14).padding(.vertical, 7)
-                        .background(Theme.sage, in: Capsule())
-                        .foregroundStyle(.white)
-                }
-                .disabled(vm.awaitingHandoff)
             }
             Spacer()
-            HStack {
-                Text(vm.log.last ?? "").font(.caption2).foregroundStyle(.white.opacity(0.9))
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Color.black.opacity(0.45), in: Capsule())
-                Spacer()
-            }
         }
-        .padding(10)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+
+    /// The match log rides the printed "Frontier" divider across the middle of
+    /// the mat — the one band that never holds a card. It steps aside for the
+    /// action bar, which claims the same spot when a card is selected.
+    @ViewBuilder
+    private func logLine(_ f: MatLayout.Frame) -> some View {
+        if chosen == nil, let last = vm.log.last {
+            Text(last)
+                .font(.system(size: f.scaled(0.036), weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+                .lineLimit(1)
+                .padding(.horizontal, f.scaled(0.018)).padding(.vertical, f.scaled(0.008))
+                .background(Color.black.opacity(0.5), in: Capsule())
+                .position(f.point(CGPoint(x: 0.50, y: 0.505)))
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
     }
 
     private func actionBar(for c: CardInstance, in size: CGSize) -> some View {
@@ -241,25 +344,31 @@ struct TCGMatchView: View {
         return HStack(spacing: 10) {
             if c.zone == .hand {
                 if vm.canPlay(c, on: side) {
-                    actionButton("Play", "hand.tap.fill") { vm.play(c, on: side); chosen = nil }
+                    actionButton("Play", "hand.tap.fill") { Task { await vm.play(c, on: side) }; chosen = nil }
                 }
                 if vm.canEat(c, on: side) {
-                    actionButton("Eat", "leaf.fill") { vm.eat(c, on: side); chosen = nil }
+                    actionButton("Eat", "leaf.fill") { Task { await vm.eat(c, on: side) }; chosen = nil }
                 }
                 if !vm.canPlay(c, on: side) && !vm.canEat(c, on: side) {
                     Text(vm.activeBoard.ateThisTurn ? "Already ate this turn" : "Not enough mana")
                         .font(.caption2.bold()).foregroundStyle(.white)
                 }
             } else if c.zone == .basecamp {
-                if vm.canMarch(c, on: side) { actionButton("March", "figure.walk") { vm.march(c, on: side); chosen = nil } }
-                if vm.canSacrifice(c, on: side) { actionButton("Sacrifice", "flame.fill") { vm.sacrifice(c, on: side); chosen = nil } }
+                if vm.canMarch(c, on: side) {
+                    actionButton("March", "figure.walk") { Task { await vm.march(c, on: side) }; chosen = nil }
+                }
+                if vm.canSacrifice(c, on: side) {
+                    actionButton("Sacrifice", "flame.fill") { Task { await vm.sacrifice(c, on: side) }; chosen = nil }
+                }
             } else if c.zone == .frontier {
                 if c.canAct && (vm.inactiveBoard.frontier.isEmpty || c.unblockable) {
-                    actionButton("Raid", "bolt.fill") { vm.attack(c, target: nil, on: side); chosen = nil }
+                    actionButton("Raid", "bolt.fill") { Task { await vm.attack(c, target: nil, on: side) }; chosen = nil }
                 } else if c.canAct {
                     Text("Tap an enemy").font(.caption2.bold()).foregroundStyle(.white)
                 }
-                if vm.canSacrifice(c, on: side) { actionButton("Sacrifice", "flame.fill") { vm.sacrifice(c, on: side); chosen = nil } }
+                if vm.canSacrifice(c, on: side) {
+                    actionButton("Sacrifice", "flame.fill") { Task { await vm.sacrifice(c, on: side) }; chosen = nil }
+                }
             }
             actionButton("Cancel", "xmark") { chosen = nil }
         }
@@ -280,10 +389,11 @@ struct TCGMatchView: View {
     /// `side` is the owner of the tapped card. You act on your own cards and
     /// attack the other side's Frontier.
     private func tap(_ inst: CardInstance, side: PlayerSide) {
-        guard vm.winner == nil, !vm.awaitingHandoff else { return }
+        guard vm.winner == nil, !vm.awaitingHandoff, !vm.busy else { return }
         if side != vm.turnSide {
             if let atk = chosen, atk.zone == .frontier, inst.zone == .frontier {
-                vm.attack(atk, target: inst, on: vm.turnSide); chosen = nil
+                Task { await vm.attack(atk, target: inst, on: vm.turnSide) }
+                chosen = nil
             }
             return
         }
@@ -302,7 +412,10 @@ struct TCGMatchView: View {
                     .font(.title2.bold()).foregroundStyle(.white)
                 Text("Hands are hidden until you're ready.")
                     .font(.footnote).foregroundStyle(.white.opacity(0.6))
-                Button { vm.confirmHandoff(); chosen = nil } label: {
+                Button {
+                    Task { await vm.confirmHandoff() }
+                    chosen = nil
+                } label: {
                     Text("I'm \(vm.name(of: next)) — Ready")
                         .font(.headline).padding(.horizontal, 26).padding(.vertical, 12)
                         .background(Theme.sage, in: Capsule()).foregroundStyle(.white)
@@ -332,70 +445,5 @@ struct TCGMatchView: View {
             .first(where: { $0 is UIWindowScene }) as? UIWindowScene else { return }
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
         scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-    }
-}
-
-// MARK: - Mini card
-
-private struct MiniCard: View {
-    let inst: CardInstance
-    var w: CGFloat = 58
-    var h: CGFloat = 80
-    var showCost: Bool = false
-    /// Cost after Guard/Relic discounts — may be lower than the printed cost.
-    var cost: Int? = nil
-    var selected: Bool = false
-    var playable: Bool = false
-    var guardian: Bool = false
-
-    var body: some View {
-        ZStack {
-            Group {
-                if let img = UIImage(named: inst.card.id) {
-                    Image(uiImage: img).resizable().scaledToFill()
-                } else {
-                    LinearGradient(colors: [inst.card.accent.opacity(0.95), inst.card.accent.opacity(0.55)],
-                                   startPoint: .top, endPoint: .bottom)
-                }
-            }
-            LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .center, endPoint: .bottom)
-
-            VStack(spacing: 0) {
-                HStack {
-                    if showCost {
-                        let shown = cost ?? inst.card.cost
-                        // Discounted costs read green so the saving is visible.
-                        pip("\(shown)", shown < inst.card.cost
-                            ? Color(red: 0.24, green: 0.55, blue: 0.28)
-                            : Color(red: 0.20, green: 0.45, blue: 0.72))
-                    }
-                    Spacer()
-                    if inst.shield { Image(systemName: "shield.fill").font(.system(size: h * 0.12)).foregroundStyle(.cyan) }
-                }
-                Spacer()
-                Text(inst.card.name).font(.system(size: h * 0.10, weight: .bold))
-                    .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.5)
-                if inst.card.type.hasStats {
-                    HStack {
-                        pip("\(inst.attack)", Color(red: 0.80, green: 0.45, blue: 0.15))
-                        Spacer()
-                        pip("\(inst.health)", inst.health < inst.maxHealth ? .red : Color(red: 0.72, green: 0.20, blue: 0.20))
-                    }
-                }
-            }
-            .padding(h * 0.05)
-        }
-        .frame(width: w, height: h)
-        .clipShape(RoundedRectangle(cornerRadius: h * 0.08, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: h * 0.08).strokeBorder(
-            selected ? Theme.gold : (playable ? Color.green : (guardian ? Color.orange.opacity(0.9) : Color.black.opacity(0.35))),
-            lineWidth: selected || playable || guardian ? 2.5 : 1))
-        .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
-    }
-
-    private func pip(_ s: String, _ c: Color) -> some View {
-        Text(s).font(.system(size: h * 0.15, weight: .black, design: .rounded)).foregroundStyle(.white)
-            .frame(width: h * 0.23, height: h * 0.23).background(Circle().fill(c))
-            .overlay(Circle().strokeBorder(.white.opacity(0.5), lineWidth: 1))
     }
 }

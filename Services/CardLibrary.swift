@@ -3,7 +3,9 @@ import Foundation
 /// The Bible-TCG card set (element/keyword design). Hard-coded in Swift like the
 /// legacy `ContentDatabase` to keep the bundle flat and avoid codesign issues.
 ///
-/// Stat guide: Human ATK+HP = 2×cost; Creature ATK+HP = 2×cost − 1.
+/// Stat guide: Human ATK+HP = 2×cost. Named Human (the `h_` ids) = 2×cost + 1.
+/// Creature ATK+HP = 2×cost − 1, minimum 2.
+/// Two documented exceptions: Leviathan (15, formula 13) and Lamb (3, formula 2).
 /// Card text follows the vocabulary in `Resources/bible-tcg-rules.md`.
 enum CardLibrary {
 
@@ -40,7 +42,7 @@ enum CardLibrary {
         TCGCard(id: "lion", name: "Lion", type: .creature, cost: 4, attack: 4, health: 3,
                 element: .land, keywords: ["guard"], ability: "Guard: The Guardian gets +2/+0."),
         TCGCard(id: "eagle", name: "Eagle", type: .creature, cost: 4, attack: 3, health: 4,
-                element: .air, ability: "March: This Creature may attack the Guardian even if the enemy Frontier is occupied."),
+                element: .air, ability: "March: This Creature may attack the enemy Guardian even if the enemy Frontier is occupied."),
         TCGCard(id: "great-fish", name: "Great Fish", type: .creature, cost: 4, attack: 3, health: 4,
                 element: .sea, ability: "Sacrifice: Deal 4 damage split among any number of enemy Frontier Creatures."),
         TCGCard(id: "behemoth-calf", name: "Behemoth Calf", type: .creature, cost: 4, attack: 4, health: 3,
@@ -120,38 +122,38 @@ enum CardLibrary {
 
         // ── Named characters (restored) ──
         // Wisdom
-        TCGCard(id: "h_solomon", name: "Solomon", type: .human, cost: 5, attack: 2, health: 6,
+        TCGCard(id: "h_solomon", name: "Solomon", type: .human, cost: 5, attack: 3, health: 8,
                 discipline: .wisdom, ability: "Play: Look at the top 2 cards of your deck; draw one."),
-        TCGCard(id: "h_moses", name: "Moses", type: .human, cost: 6, attack: 3, health: 6,
+        TCGCard(id: "h_moses", name: "Moses", type: .human, cost: 6, attack: 5, health: 8,
                 discipline: .wisdom, keywords: ["guard"], ability: "Guard: Sacrifices give +1 extra point."),
-        TCGCard(id: "h_daniel", name: "Daniel", type: .human, cost: 4, attack: 2, health: 5,
+        TCGCard(id: "h_daniel", name: "Daniel", type: .human, cost: 4, attack: 3, health: 6,
                 discipline: .wisdom, keywords: ["shield"], ability: "Shield."),
-        TCGCard(id: "h_abraham", name: "Abraham", type: .human, cost: 5, attack: 3, health: 6,
+        TCGCard(id: "h_abraham", name: "Abraham", type: .human, cost: 5, attack: 4, health: 7,
                 discipline: .wisdom, keywords: ["guard"], ability: "Guard: Other Humans get +0/+1."),
-        TCGCard(id: "h_joseph", name: "Joseph", type: .human, cost: 4, attack: 2, health: 5,
+        TCGCard(id: "h_joseph", name: "Joseph", type: .human, cost: 4, attack: 3, health: 6,
                 discipline: .wisdom, ability: "Play: Draw a card."),
-        TCGCard(id: "h_paul", name: "Paul", type: .human, cost: 5, attack: 4, health: 5,
+        TCGCard(id: "h_paul", name: "Paul", type: .human, cost: 5, attack: 4, health: 7,
                 discipline: .wisdom, ability: "Play: Draw a card, then discard a card."),
-        TCGCard(id: "h_deborah", name: "Deborah", type: .human, cost: 4, attack: 3, health: 5,
+        TCGCard(id: "h_deborah", name: "Deborah", type: .human, cost: 4, attack: 3, health: 6,
                 discipline: .wisdom, keywords: ["guard"], ability: "Guard: Courage Humans get +1/+0."),
-        TCGCard(id: "h_isaiah", name: "Isaiah", type: .human, cost: 4, attack: 3, health: 5,
+        TCGCard(id: "h_isaiah", name: "Isaiah", type: .human, cost: 4, attack: 3, health: 6,
                 discipline: .wisdom, ability: "Play: Look at the top card of your deck."),
         TCGCard(id: "h_eve", name: "Eve", type: .human, cost: 3, attack: 2, health: 5,
                 discipline: .wisdom, ability: "Play: Both players draw a card."),
-        TCGCard(id: "h_magi", name: "The Magi", type: .human, cost: 5, attack: 4, health: 5,
+        TCGCard(id: "h_magi", name: "The Magi", type: .human, cost: 5, attack: 5, health: 6,
                 discipline: .wisdom, ability: "Play: Draw a card."),
         // Courage
         TCGCard(id: "h_david", name: "David", type: .human, cost: 4, attack: 5, health: 4,
                 discipline: .courage, keywords: ["charge"], ability: "Charge."),
-        TCGCard(id: "h_joshua", name: "Joshua", type: .human, cost: 6, attack: 5, health: 6,
-                discipline: .courage, ability: "March: Gains +2/+0 when it attacks the Guardian."),
-        TCGCard(id: "h_gideon", name: "Gideon", type: .human, cost: 3, attack: 4, health: 4,
+        TCGCard(id: "h_joshua", name: "Joshua", type: .human, cost: 6, attack: 6, health: 7,
+                discipline: .courage, ability: "March: Gains +2/+0 when it attacks the enemy Guardian."),
+        TCGCard(id: "h_gideon", name: "Gideon", type: .human, cost: 3, attack: 4, health: 3,
                 discipline: .courage, keywords: ["charge"], ability: "Charge."),
-        TCGCard(id: "h_esther", name: "Esther", type: .human, cost: 4, attack: 2, health: 5,
+        TCGCard(id: "h_esther", name: "Esther", type: .human, cost: 4, attack: 3, health: 6,
                 discipline: .courage, keywords: ["shield"], ability: "Shield."),
-        TCGCard(id: "h_elijah", name: "Elijah", type: .human, cost: 5, attack: 4, health: 5,
+        TCGCard(id: "h_elijah", name: "Elijah", type: .human, cost: 5, attack: 5, health: 6,
                 discipline: .courage, ability: "Play: Deal 3 damage to an enemy Frontier Creature."),
-        TCGCard(id: "h_peter", name: "Peter", type: .human, cost: 5, attack: 5, health: 5,
+        TCGCard(id: "h_peter", name: "Peter", type: .human, cost: 5, attack: 6, health: 5,
                 discipline: .courage, ability: "March: If you control a Sea Creature, gains +1/+1 until end of turn."),
         TCGCard(id: "h_baptist", name: "John the Baptist", type: .human, cost: 3, attack: 3, health: 4,
                 discipline: .courage, ability: "Play: Draw a card."),
@@ -159,16 +161,16 @@ enum CardLibrary {
                 discipline: .courage, ability: "Play: Draw a card, then discard a card."),
         // Strength
         TCGCard(id: "h_samson", name: "Samson", type: .human, cost: 7, attack: 8, health: 7,
-                discipline: .strength, ability: "Death: Deal 3 damage to all Frontier Creatures."),
+                discipline: .strength, ability: "Death: Deal 3 damage to all enemy Frontier Creatures."),
         TCGCard(id: "h_goliath", name: "Goliath", type: .human, cost: 7, attack: 7, health: 8,
                 discipline: .strength),
         TCGCard(id: "h_benaiah", name: "Benaiah", type: .human, cost: 5, attack: 6, health: 5,
                 discipline: .strength, keywords: ["charge"], ability: "Charge."),
-        TCGCard(id: "h_caleb", name: "Caleb", type: .human, cost: 4, attack: 5, health: 5,
+        TCGCard(id: "h_caleb", name: "Caleb", type: .human, cost: 4, attack: 5, health: 4,
                 discipline: .strength, keywords: ["charge"], ability: "Charge."),
         TCGCard(id: "h_jael", name: "Jael", type: .human, cost: 3, attack: 4, health: 3,
                 discipline: .strength, ability: "Play: Destroy a damaged enemy Frontier Creature."),
-        TCGCard(id: "h_nehemiah", name: "Nehemiah", type: .human, cost: 5, attack: 3, health: 7,
+        TCGCard(id: "h_nehemiah", name: "Nehemiah", type: .human, cost: 5, attack: 3, health: 8,
                 discipline: .strength, keywords: ["guard"], ability: "Guard: The Guardian gets +0/+2."),
     ]
 

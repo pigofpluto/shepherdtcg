@@ -1,7 +1,9 @@
 {
   "statFormula": {
     "human": "attack + health = 2 * cost",
-    "creature": "attack + health = 2 * cost - 1 (equal to cost at cost 1)"
+    "namedHuman": "attack + health = 2 * cost + 1. Named Humans are the Bible characters (the h_ ids in CardLibrary.swift), as opposed to the generic archetypes. The premium is exactly +1, never more. Named Creatures get no premium.",
+    "creature": "attack + health = 2 * cost - 1, minimum 2. The minimum exists because a cost-1 Creature would otherwise be 1/0 (dead on arrival) or 0/1 (unable to attack).",
+    "exceptions": "Leviathan (15, formula says 13) and Lamb (3, formula says 2) are deliberate exceptions. Leave them alone."
   },
   "vocabulary": {
     "creature": "Always capitalized; always means the card type. A Human in the Frontier is not a Creature and cannot be targeted by Creature-targeting text.",
@@ -13,7 +15,7 @@
     "overnight": "A card has spent the night once it has been in play throughout the opponent's entire turn.",
     "heal": "Only two forms: 'Heal N' and 'Heal to full'.",
     "scopeDefault": "An effect that names no side refers to your own cards. Text says 'enemy' when it means the opponent's. Condition checks may still read 'if you control ...'.",
-    "points": "Element points are always written '+N <Element> points', e.g. '+2 Sea points'."
+    "points": "A Creature's own point value is a printed stat — its element value 1-3, written beside the Element as '2 Sea'. Only cards that MODIFY someone else's points use text, and it is written '+N <Element> points' or as a multiplier (Moses, Fish Net)."
   },
   "keywords": {
     "triggers": ["play", "march", "raid", "sacrifice", "death"],
@@ -34,13 +36,32 @@
     "frontierMax": 5,
     "relicSlots": 2,
     "relicsPerDeck": 2,
+    "manaPoolMax": 10,
+    "drawPerTurn": 2,
+    "deckConstruction": {
+      "bodies": 28,
+      "minimumCost1": 2,
+      "effect": "A deck is 28 bodies (Humans and Creatures) and must contain at least 2 cards costing 1, so the preparing phase can always be completed.",
+      "relics": "The 2 Relics are chosen separately and are NOT part of the 28. They begin the game face-down in the Relic slots."
+    },
+    "preparingPhase": {
+      "searchCost1": 2,
+      "draw": 5,
+      "convertToMana": 1,
+      "effect": "Before turn 1, both players search their deck for two cards costing 1 and place them in their Basecamp, shuffle, draw 5, convert 1 card to their Mana Pool, and keep the rest. Opening hand is 4.",
+      "guardian": "The order cards are placed sets the Basecamp slots, so the first card placed is the Guardian.",
+      "firstPlayer": "After both players prepare, flip a coin to decide who takes the first turn. Nothing currently compensates the second player."
+    },
     "mana": {
-      "startingBerries": 0,
-      "berryMax": 10,
-      "eatPerTurn": 1,
-      "eatEffect": "Once per turn you may eat a card from hand. It goes to the discard and you gain one berry permanently. That berry's mana is available the same turn you ate it.",
-      "refill": "At the start of each of your turns your mana refills to your berry count.",
-      "atCap": "At 10 berries you can no longer eat."
+      "zone": "Mana Pool — sits beside the hand. Every card in it is worth 1 mana.",
+      "startingPool": 1,
+      "poolMax": 10,
+      "convertPerTurn": 1,
+      "convertEffect": "Once per turn you may convert a card from hand to your Mana Pool. Its mana is available the same turn you convert it. Converting is optional, but skipping it leaves you permanently a mana behind.",
+      "permanence": "Cards in the Mana Pool are there permanently. They never return to hand, deck or discard, and the card's own text does nothing while it is mana — only its existence counts. The Mana Pool is NOT the discard, so discard recursion (River Otter) cannot recover converted cards.",
+      "refill": "At the start of each of your turns your mana refills to the size of your Mana Pool.",
+      "atCap": "At 10 cards the Pool is full and you can no longer convert.",
+      "curve": "Starting from the 1 card converted during the preparing phase, on turn N you have N + 1 mana available."
     },
     "basecampGuardian": "Basecamp slots are numbered 1-4 in the order cards are placed. The card in slot 1 is the Guardian and takes all incoming Raid damage. When the Guardian dies or leaves the Basecamp, every other card shifts up one slot, and whichever card is now in slot 1 becomes the new Guardian.",
     "frontierOverflow": "If the Frontier is at its 5-card max, a player can discard a card or Sacrifice a Creature to make room.",
@@ -48,12 +69,14 @@
     "combat": "When a card attacks from the Frontier, the attacker and the defender each deal damage equal to their Attack to the other. A card whose Health reaches 0 goes to the discard.",
     "raid": "If the opponent's Frontier is empty, an attacker hits the opponent's Basecamp Guardian instead. A Raid takes no retaliation.",
     "altar": "Sacrificed Creatures go to the Altar. Clearing an Event flushes your Altar to the discard. Cards that die in combat go straight to the discard, not the Altar.",
-    "sacrificeBaseline": "Sacrificing a Creature moves it to the Altar and gives +1 point of that Creature's Element.",
-    "pointModifierOrder": "1) Set the base amount (the Creature's own printed value). 2) Apply flat modifiers (Moses). 3) Apply multipliers (Fish Net). Kraken with Moses and Fish Net = (3 + 1) * 2 = 8 Sea points.",
+    "sacrificeBaseline": "Every Creature prints an element value from 1 to 3 beside its Element (e.g. '2 Sea'). Sacrificing it moves it to the Altar and gives that many points of its Element. The element value is a printed stat like Attack and Health, not ability text, and needs no trigger written on the card.",
+    "elementValuesPending": "The 1-3 element values are NOT yet assigned on any Creature card. They are being set separately. Minnow Shoal, Kraken and Ant currently encode their value in ability text ('+2 Sea points', '+3 Sea points', '+2 Land points'); that text must be deleted when printed values land, or those cards will double-count.",
+    "pointModifierOrder": "1) Set the base amount (the Creature's printed element value). 2) Apply flat modifiers (Moses). 3) Apply multipliers (Fish Net). A Creature printing '3 Sea' with Moses and Fish Net = (3 + 1) * 2 = 8 Sea points.",
+    "relics": "Each deck chooses 2 Relics. They are not part of the 28-card deck and are never played from hand. They begin face-down in the 2 Relic slots and cost no mana. Clearing Event 1 flips one Relic face-up (the player's choice which); clearing Event 2 flips the other; clearing Event 3 wins the game and grants nothing. A face-down Relic does nothing; once flipped it is permanent and its text is live. A cascading clear flips one Relic per Event cleared. Relic cards still carry a printed cost — it is UNUSED under these rules and is retained only pending a decision on whether to repurpose it.",
     "eventStructure": "Each player has their own Event 1 and Event 2; Event 3 is shared. Events unlock one at a time: only Event 1 is face-up at the start, clearing it reveals Event 2, and clearing Event 2 unlocks Event 3. When either player unlocks Event 3 it is revealed to both, but a player who has not cleared their own Events 1 and 2 can see it without being able to clear it.",
-    "eventClearing": "Clearing an Event subtracts exactly its requirement — any surplus stays banked — and flushes your Altar. Clears cascade: if clearing Event 1 leaves enough points for the Event 2 it just revealed, that clears too, in the same action.",
+    "eventClearing": "Clearing an Event subtracts exactly its requirement — any surplus stays banked — flushes your Altar, and flips one of your face-down Relics (see rules.relics). Clears cascade: if clearing Event 1 leaves enough points for the Event 2 it just revealed, that clears too, in the same action, flipping a second Relic.",
     "winCondition": "First player to overcome all 3 of their Events reaches the Promised Land and wins.",
-    "loseCondition": "A player loses immediately if their Basecamp has 0 cards in it. You may never voluntarily empty it — the last Basecamp card cannot March or be Sacrificed."
+    "loseCondition": "A player loses when their Basecamp is emptied BY COMBAT. You may never voluntarily empty it — the last Basecamp card cannot March or be Sacrificed."
   },
   "creatures": [
     { "id": "sparrow", "name": "Sparrow", "cost": 1, "element": "air", "attack": 1, "health": 1, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Draw a card." }] },
@@ -67,7 +90,7 @@
     { "id": "river-otter", "name": "River Otter", "cost": 3, "element": "sea", "attack": 3, "health": 2, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Return a Human from your discard to your hand." }] },
     { "id": "stone-ram", "name": "Stone Ram", "cost": 3, "element": "land", "attack": 2, "health": 3, "keywords": ["charge"], "abilities": [] },
     { "id": "lion", "name": "Lion", "cost": 4, "element": "land", "attack": 4, "health": 3, "keywords": ["guard"], "abilities": [{ "trigger": "guard", "text": "The Guardian gets +2/+0." }] },
-    { "id": "eagle", "name": "Eagle", "cost": 4, "element": "air", "attack": 3, "health": 4, "keywords": [], "abilities": [{ "trigger": "march", "text": "This Creature may attack the Guardian even if the enemy Frontier is occupied." }] },
+    { "id": "eagle", "name": "Eagle", "cost": 4, "element": "air", "attack": 3, "health": 4, "keywords": [], "abilities": [{ "trigger": "march", "text": "This Creature may attack the enemy Guardian even if the enemy Frontier is occupied." }] },
     { "id": "great-fish", "name": "Great Fish", "cost": 4, "element": "sea", "attack": 3, "health": 4, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Deal 4 damage split among any number of enemy Frontier Creatures." }] },
     { "id": "behemoth-calf", "name": "Behemoth Calf", "cost": 4, "element": "land", "attack": 4, "health": 3, "keywords": [], "abilities": [] },
     { "id": "serpent", "name": "Serpent", "cost": 5, "element": "land", "attack": 5, "health": 4, "keywords": [], "abilities": [{ "trigger": "sacrifice", "text": "Destroy an enemy Frontier Creature with 3 or less Health." }] },

@@ -6,8 +6,25 @@ This document is the canonical vocabulary. Card text uses only the terms defined
 here. `Services/CardLibrary.swift` is the live card set (87 cards); the tables at
 the end of this file cover the **starter set** only.
 
-Stat formula: **Human total (ATK+HP) = 2× cost.** **Creature total = 2× cost, minus 1** (equal at cost 1).
-Creatures pay less total stats because Sacrifice gives them an escape valve Humans don't have.
+## Stat formula
+
+| Card | Total (ATK + HP) |
+|---|---|
+| **Human** | 2× cost |
+| **Named Human** | 2× cost **+ 1** |
+| **Creature** | 2× cost **− 1**, minimum 2 |
+
+Creatures pay less total stats because Sacrifice gives them an escape valve Humans
+don't have. The minimum of 2 exists because a cost-1 Creature would otherwise be
+1/0 (dead on arrival) or 0/1 (unable to attack).
+
+**Named Humans** are the Bible characters — Moses, David, Esther and the rest. They
+carry a flat **+1** over the generic archetypes (Soldier, Craftsman, Watchman…) as
+a deliberate premium. The premium is exactly +1 on every named Human, never more.
+Named *Creatures* get no premium; they follow the Creature line.
+
+Two cards are deliberate exceptions and should be left alone: **Leviathan** (15,
+formula says 13) and **Lamb** (3, formula says 2).
 
 ---
 
@@ -16,9 +33,9 @@ Creatures pay less total stats because Sacrifice gives them an escape valve Huma
 | Type | Attribute | Notes |
 |---|---|---|
 | **Human** | a **Discipline** — Wisdom, Courage, Strength | Has Attack / Health |
-| **Creature** | an **Element** — Air, Sea, Land | Has Attack / Health. Only Creatures can be Sacrificed |
+| **Creature** | an **Element** — Air, Sea, Land, with a value **1–3** | Has Attack / Health. Only Creatures can be Sacrificed |
 | **Event** | an element requirement | Not played from hand — see *Events* |
-| **Relic** | — | Permanent. Max **2 per deck** |
+| **Relic** | — | Permanent. **2 per deck**, not played from hand — see *Relics* |
 
 "Creature" and "Human" are always capitalized and always mean the card type. A
 Human standing in the Frontier is **not** a Creature and cannot be targeted by an
@@ -32,11 +49,14 @@ ability that says Creature.
 | **Hand** | 7 |
 | **Basecamp** | 4 — slot 1 is the **Guardian** |
 | **Frontier** | 5 |
-| **Relic slots** | 2 |
+| **Relic slots** | 2 — hold your 2 Relics, face-down until unlocked |
+| **Mana Pool** | 10 — holds cards converted to mana |
 | **Altar** | — holds Sacrificed Creatures |
 | **Discard** | — |
 
-Basecamp and Frontier are **separate zones**.
+Basecamp and Frontier are **separate zones**. So are the Mana Pool and the discard
+— a card converted to mana is **not** in your discard and cannot be recovered from
+there.
 
 ---
 
@@ -79,18 +99,52 @@ that's called a Blessing.
 
 ---
 
-## Mana — berries
+## Deck construction
 
-You start the game with **0 berries**.
+A deck is **28 bodies** — Humans and Creatures. It must contain **at least 2 cards
+costing 1**, so the preparing phase can always be completed.
 
-Once per turn you may **eat** a card from your hand. It goes to the discard and
-you gain **one berry**, permanently — and that berry's mana is available on the
-same turn you ate it.
+Your **2 Relics are chosen separately** and are not part of the 28. They begin the
+game face-down in your Relic slots. See *Relics* below.
 
-At the start of each of your turns your mana refills to your berry count. At
-**10 berries** you can no longer eat.
+## The preparing phase
 
-Ramping costs you cards. Skipping a meal leaves you permanently a berry behind.
+Before turn 1, both players prepare:
+
+1. **Search your deck** for two cards costing 1 and place them in your Basecamp.
+   The order you place them sets the Basecamp slots, so the first card you place is
+   your **Guardian**.
+2. **Shuffle your deck.**
+3. **Draw 5.**
+4. **Convert 1 card** from your hand to your Mana Pool.
+5. **Keep the rest** — an opening hand of **4**.
+
+Then **flip a coin** to decide who takes the first turn.
+
+## Mana — the Mana Pool
+
+Your **Mana Pool** sits beside your hand. Every card in it is worth **1 mana**.
+
+Once per turn you may **convert** a card from your hand to the Mana Pool. Its mana
+is available the same turn you convert it. Converting is optional, but skipping it
+leaves you permanently a mana behind.
+
+Cards in the Mana Pool are there **permanently**. They never return to your hand,
+your deck or your discard, and the card's own text does nothing while it is mana —
+only its existence counts.
+
+At the start of each of your turns your mana refills to the size of your Mana Pool.
+At **10 cards** the Pool is full and you can no longer convert.
+
+You start the game with **1 card** in your Pool, converted during the preparing
+phase, so on turn N you have N + 1 mana available.
+
+Ramping costs you cards. Each conversion is a card you will never draw, play or
+Sacrifice.
+
+## Drawing
+
+Draw **2 cards** at the start of each of your turns.
 
 ## Combat
 
@@ -110,19 +164,21 @@ now in slot 1 becomes the new Guardian. This is automatic — not a card ability
 
 ## Sacrifice and points
 
-Sacrificing a Creature moves it to the **Altar** and gives you **+1 point** of
-that Creature's Element.
+Every Creature prints an **element value from 1 to 3** beside its Element — for
+example `2 Sea`. Sacrificing that Creature moves it to the **Altar** and gives you
+**that many points** of its Element.
 
-Cards that change this are written as `+N <Element> points` — for example
-`Sacrifice: +2 Sea points`.
+The element value is a printed stat, like Attack and Health. It is not ability text
+and needs no trigger written on the card.
 
 When several modifiers apply, resolve in this order:
 
-1. Set the base amount (the Creature's own printed value, e.g. Kraken's +3)
+1. Set the base amount — the Creature's **printed element value**
 2. Apply flat modifiers (Moses: +1 extra point)
 3. Apply multipliers (Fish Net: double)
 
-So Kraken, with Moses in the Basecamp and Fish Net in play: (3 + 1) × 2 = **8 Sea points**.
+So a Creature printing `3 Sea`, with Moses in the Basecamp and Fish Net in play:
+(3 + 1) × 2 = **8 Sea points**.
 
 ## Events
 
@@ -143,6 +199,29 @@ next one — and flushes your Altar to the discard.
 Clears **cascade**: if clearing Event 1 leaves you with enough points for the
 Event 2 it just revealed, that clears too, in the same action.
 
+Clearing an Event also **flips a Relic** — see below. A cascading clear flips one
+Relic per Event cleared, so clearing Events 1 and 2 in a single action flips both.
+
+## Relics
+
+Your **2 Relics** are chosen with your deck but are not part of it. They begin the
+game **face-down** in your 2 Relic slots.
+
+Relics are not played from hand and cost no mana. You unlock them by clearing
+Events:
+
+| Event cleared | Effect |
+|---|---|
+| **Event 1** | Flip one of your Relics face-up — your choice which |
+| **Event 2** | Flip your other Relic face-up |
+| **Event 3** | Nothing — clearing it wins the game |
+
+A face-down Relic does nothing. Once flipped it is permanent and its text is live
+for the rest of the game.
+
+*Relic cards still carry a printed cost. It is **unused** under these rules and is
+retained only pending a decision on whether to repurpose it.*
+
 ## Winning and losing
 
 - **Win:** overcome all 3 of your Events and reach the Promised Land.
@@ -159,6 +238,9 @@ card or Sacrifice a Creature to make room.
 
 ## Creatures (20)
 
+The **element value 1–3** is not yet assigned on these cards — the Element column
+shows the Element only. Values are being set separately.
+
 | Name | Cost | Element | ATK/HP | Ability |
 |---|---|---|---|---|
 | Sparrow | 1 | Air | 1/1 | Sacrifice: Draw a card. |
@@ -172,7 +254,7 @@ card or Sacrifice a Creature to make room.
 | River Otter | 3 | Sea | 3/2 | Sacrifice: Return a Human from your discard to your hand. |
 | Stone Ram | 3 | Land | 2/3 | Charge. |
 | Lion | 4 | Land | 4/3 | Guard: The Guardian gets +2/+0. |
-| Eagle | 4 | Air | 3/4 | March: This Creature may attack the Guardian even if the enemy Frontier is occupied. |
+| Eagle | 4 | Air | 3/4 | March: This Creature may attack the enemy Guardian even if the enemy Frontier is occupied. |
 | Great Fish | 4 | Sea | 3/4 | Sacrifice: Deal 4 damage split among any number of enemy Frontier Creatures. |
 | Behemoth Calf | 4 | Land | 4/3 | Vanilla. |
 | Serpent | 5 | Land | 5/4 | Sacrifice: Destroy an enemy Frontier Creature with 3 or less Health. |
@@ -207,7 +289,9 @@ card or Sacrifice a Creature to make room.
 | Champion | 6 | Strength | 7/5 | Raid: Also deal this Human's Attack to the enemy Basecamp card with the lowest Health. |
 | Anointed King | 7 | Courage | 7/7 | Vanilla. |
 
-## Relics (5 — decks include up to 2)
+## Relics (5 — each deck chooses 2)
+
+Costs below are **unused** — Relics are unlocked by clearing Events, not paid for.
 
 | Name | Cost | Ability |
 |---|---|---|

@@ -22,6 +22,49 @@ final class MatchViewModel: ObservableObject {
     /// incoming player taps "I'm ready".
     @Published private(set) var awaitingHandoff = false
 
+    // MARK: Presentation
+
+    /// Set while an action is playing out its animation. Input is locked for the
+    /// duration — every `can…` guard reads it — so taps can't interleave with a
+    /// half-resolved board.
+    @Published private(set) var busy = false
+
+    /// Floating numbers, flashes and other transient cues. Self-expiring.
+    @Published private(set) var cues: [VisualCue] = []
+
+    /// An attack in flight: the view leans the attacker toward its target.
+    /// `target` is nil for a Raid, which lunges at the enemy Basecamp.
+    @Published private(set) var lunge: Lunge?
+
+    struct Lunge { let attacker: UUID; let target: UUID?; let side: PlayerSide }
+
+    /// Skips every animation pause, so the headless probe runs at full speed and
+    /// no cue-expiry tasks are left dangling. Set by `Tests/EngineProbe.swift`.
+    var instant = false
+
+    /// One animation beat: publish what just changed, then hold long enough to
+    /// see it. Every pause in the engine goes through here.
+    private func beat(_ ms: UInt64 = 280) async {
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) { bump() }
+        guard !instant else { return }
+        try? await Task.sleep(nanoseconds: ms * 1_000_000)
+    }
+
+    private func cue(_ kind: VisualCue.Kind, on card: CardInstance? = nil, side: PlayerSide) {
+        guard !instant else { return }
+        let c = VisualCue(card: card?.id, side: side, kind: kind)
+        cues.append(c)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            self?.cues.removeAll { $0.id == c.id }
+        }
+    }
+
+    /// The side that owns a card in play — cues need it to pick an anchor.
+    private func owner(of c: CardInstance) -> PlayerSide {
+        you.allInPlay.contains(where: { $0 === c }) ? .you : .foe
+    }
+
     /// The player whose turn it is (and whose hand is visible).
     var activeBoard: PlayerBoard { board(turnSide) }
     var inactiveBoard: PlayerBoard { opp(turnSide) }
@@ -57,7 +100,17 @@ final class MatchViewModel: ObservableObject {
                       EventProgress(finale, revealed: false)]
 
         for _ in 0..<3 { drawCard(you); drawCard(foe) }
-        beginTurn(.you)
+
+        #if DEBUG
+        // Opt-in stacked board for checking animation by eye — see DebugSandbox.
+        if DebugSandbox.isRequested {
+            DebugSandbox.apply(you: you, foe: foe, turn: turnNumber)
+        }
+        #endif
+
+        // `init` can't await, so turn 1 is dealt without pauses.
+        beginTurnState(.you)
+        settleInstantly()
     }
 
     static func buildDeck() -> [TCGCard] {
@@ -74,7 +127,9 @@ final class MatchViewModel: ObservableObject {
     private func opp(_ s: PlayerSide) -> PlayerBoard { s == .you ? foe : you }
     private func opp(_ b: PlayerBoard) -> PlayerBoard { b === you ? foe : you }
 
-    private func beginTurn(_ s: PlayerSide) {
+    /// The rules half of beginning a turn, with no pauses — shared by `setup()`
+    /// (which can't await) and the animated `beginTurn`.
+    private func beginTurnState(_ s: PlayerSide) {
         turnSide = s
         let b = board(s)
 
@@ -90,28 +145,38 @@ final class MatchViewModel: ObservableObject {
         }
         drawCard(b)
         note("\(name(of: s)) — turn \(turnNumber), \(b.mana)/\(b.berries) mana")
-        settle()
+    }
+
+    private func beginTurn(_ s: PlayerSide) async {
+        beginTurnState(s)
+        await beat(320)             // the drawn card lands in hand
+        await settle()
     }
 
     /// End the active player's turn and hand the device over.
-    func endTurn() {
-        guard winner == nil, !awaitingHandoff else { return }
+    func endTurn() async {
+        guard winner == nil, !awaitingHandoff, !busy else { return }
+        busy = true
+        defer { busy = false; bump() }
+
         selected = nil
-        endOfTurnCleanup()
+        await endOfTurnCleanup()
         awaitingHandoff = true      // hide hands until the next player is ready
-        bump()
     }
 
     /// The incoming player taps "I'm ready" on the handoff screen.
-    func confirmHandoff() {
-        guard awaitingHandoff else { return }
+    func confirmHandoff() async {
+        guard awaitingHandoff, !busy else { return }
+        busy = true
+        defer { busy = false; bump() }
+
         awaitingHandoff = false
         turnNumber += 1
-        beginTurn(turnSide == .you ? .foe : .you)
+        await beginTurn(turnSide == .you ? .foe : .you)
     }
 
     /// Expire everything that was only good "this turn".
-    private func endOfTurnCleanup() {
+    private func endOfTurnCleanup() async {
         for b in [you, foe] {
             for c in b.allInPlay {
                 c.tempAttack = 0
@@ -124,14 +189,22 @@ final class MatchViewModel: ObservableObject {
                 }
             }
         }
-        settle()
+        await settle()
     }
 
-    private func drawCard(_ b: PlayerBoard) {
-        guard !b.deck.isEmpty else { return }
+    @discardableResult
+    private func drawCard(_ b: PlayerBoard) -> CardInstance? {
+        guard !b.deck.isEmpty else { return nil }
         let inst = CardInstance(b.deck.removeFirst(), turn: turnNumber)
-        if b.hand.count >= handMax { b.discard.append(inst) }   // burn overflow
-        else { b.hand.append(inst) }
+        if b.hand.count >= handMax {                            // burn overflow
+            inst.zone = .discard
+            b.discard.append(inst)
+        } else {
+            inst.zone = .hand
+            b.hand.append(inst)
+            cue(.draw, on: inst, side: b.side)
+        }
+        return inst
     }
 
     // MARK: Mana — berries
@@ -139,20 +212,28 @@ final class MatchViewModel: ObservableObject {
     /// Once per turn you may eat a card from hand for a permanent berry.
     func canEat(_ inst: CardInstance, on s: PlayerSide) -> Bool {
         let b = board(s)
-        guard winner == nil, !awaitingHandoff else { return false }
+        guard winner == nil, !awaitingHandoff, !busy else { return false }
         return !b.ateThisTurn && b.berries < berryMax && b.hand.contains { $0.id == inst.id }
     }
 
-    func eat(_ inst: CardInstance, on s: PlayerSide) {
+    func eat(_ inst: CardInstance, on s: PlayerSide) async {
         let b = board(s)
         guard canEat(inst, on: s), let idx = b.hand.firstIndex(where: { $0.id == inst.id }) else { return }
+        busy = true
+        defer { busy = false; bump() }
+
         b.hand.remove(at: idx)
+        inst.zone = .discard
         b.discard.append(inst)
+        b.ateThisTurn = true
+        await beat(260)              // the eaten card leaves the hand
+
         b.berries += 1
         b.mana += 1                  // the new berry is usable the same turn
-        b.ateThisTurn = true
+        cue(.berry, side: s)
         note("\(name(of: s)) eats \(inst.card.name) — \(b.berries) berr\(b.berries == 1 ? "y" : "ies")")
-        settle()
+        await beat(240)              // the berry counter ticks up
+        await settle()
     }
 
     /// Cost after Guard discounts (Whale, Camel) and Ark of the Covenant.
@@ -170,7 +251,7 @@ final class MatchViewModel: ObservableObject {
 
     func canPlay(_ inst: CardInstance, on s: PlayerSide) -> Bool {
         let b = board(s)
-        guard winner == nil, !awaitingHandoff else { return false }
+        guard winner == nil, !awaitingHandoff, !busy else { return false }
         guard effectiveCost(inst.card, for: b) <= b.mana else { return false }
         switch inst.card.type {
         case .relic:            return b.relics.count < relicMax
@@ -179,9 +260,12 @@ final class MatchViewModel: ObservableObject {
         }
     }
 
-    func play(_ inst: CardInstance, on s: PlayerSide) {
+    func play(_ inst: CardInstance, on s: PlayerSide) async {
         let b = board(s)
         guard canPlay(inst, on: s), let idx = b.hand.firstIndex(where: { $0.id == inst.id }) else { return }
+        busy = true
+        defer { busy = false; bump() }
+
         let cost = effectiveCost(inst.card, for: b)     // before playedCardThisTurn flips
         b.hand.remove(at: idx)
         b.mana -= cost
@@ -193,18 +277,23 @@ final class MatchViewModel: ObservableObject {
         case .relic:
             b.relics.append(inst)
             inst.zone = .basecamp
+            note("\(name(of: s)) plays \(inst.card.name)")
+            await beat(300)                             // the Relic slides into its slot
         default:
             inst.zone = .basecamp
             b.basecamp.append(inst)
             b.everDeployed = true
+            note("\(name(of: s)) plays \(inst.card.name)")
+            await beat(300)                             // the card slides into Camp
+
             // Scroll of Wisdom grants every Wisdom Human a Play: draw.
             if inst.isHuman, inst.card.discipline == .wisdom, b.hasRelic("scroll-of-wisdom") {
                 drawCard(b); note("Scroll of Wisdom draws for \(inst.card.name)")
             }
             firePlay(inst, b)
+            await beat()                                // its Play ability resolves
         }
-        note("\(name(of: s)) plays \(inst.card.name)")
-        settle()
+        await settle()
     }
 
     /// Banner of Courage grants Charge to your Courage Humans.
@@ -217,7 +306,7 @@ final class MatchViewModel: ObservableObject {
     /// Basecamp (that would forfeit), so the last Basecamp card can't March.
     func canMarch(_ inst: CardInstance, on s: PlayerSide) -> Bool {
         let b = board(s)
-        guard winner == nil, !awaitingHandoff else { return false }
+        guard winner == nil, !awaitingHandoff, !busy else { return false }
         return inst.zone == .basecamp
             && (inst.enteredOn < turnNumber || hasCharge(inst, b))
             && b.basecamp.count > 1
@@ -228,19 +317,24 @@ final class MatchViewModel: ObservableObject {
     /// last card sitting in your Basecamp can't be sacrificed away.
     func canSacrifice(_ inst: CardInstance, on s: PlayerSide) -> Bool {
         let b = board(s)
-        guard winner == nil, !awaitingHandoff, inst.isCreature else { return false }
+        guard winner == nil, !awaitingHandoff, !busy, inst.isCreature else { return false }
         return inst.zone == .frontier || b.basecamp.count > 1
     }
 
-    func march(_ inst: CardInstance, on s: PlayerSide) {
+    func march(_ inst: CardInstance, on s: PlayerSide) async {
         let b = board(s)
         guard canMarch(inst, on: s),
               let idx = b.basecamp.firstIndex(where: { $0.id == inst.id }) else { return }
+        busy = true
+        defer { busy = false; bump() }
+
         b.basecamp.remove(at: idx)
         inst.zone = .frontier
         inst.enteredOn = turnNumber
         inst.canAct = true
         b.frontier.append(inst)
+        note("\(name(of: s)) marches \(inst.card.name)")
+        await beat(320)                     // the card walks out to the Frontier
 
         if inst.isHuman {
             b.humansMarchedThisTurn += 1
@@ -252,26 +346,40 @@ final class MatchViewModel: ObservableObject {
             }
         }
         fireMarch(inst, b)
-        note("\(name(of: s)) marches \(inst.card.name)")
-        settle()
+        await beat()                        // its March ability resolves
+        await settle()
     }
 
     /// Attack an enemy Frontier card, or Raid the Guardian if `target` is nil.
-    func attack(_ attacker: CardInstance, target: CardInstance?, on s: PlayerSide) {
+    func attack(_ attacker: CardInstance, target: CardInstance?, on s: PlayerSide) async {
         let b = board(s), o = opp(s)
-        guard winner == nil, !awaitingHandoff else { return }
+        guard winner == nil, !awaitingHandoff, !busy else { return }
         guard attacker.zone == .frontier, attacker.canAct else { return }
-
+        // Resolve the Raid's victim up front so nothing is half-committed if the
+        // lunge has no legal target.
+        let victim: CardInstance?
         if let target {
             guard target.zone == .frontier else { return }
-            attacker.canAct = false
+            victim = target
+        } else {
+            guard o.frontier.isEmpty || attacker.unblockable, let g = o.guardian else { return }
+            victim = g
+        }
+        busy = true
+        defer { busy = false; lunge = nil; bump() }
+
+        attacker.canAct = false
+        lunge = Lunge(attacker: attacker.id, target: victim?.id, side: s)
+        await beat(200)                     // the attacker leans in
+
+        if let target {
             deal(strikeDamage(attacker), to: target, from: attacker)
             deal(target.attack, to: attacker, from: target)      // the defender hits back
             note("\(attacker.card.name) attacks \(target.card.name)")
+            lunge = nil
+            await beat(340)                 // impact, damage numbers, recoil
         } else {
-            // Raid: only through an empty Frontier, unless the attacker is unblockable.
-            guard o.frontier.isEmpty || attacker.unblockable, let guardian = o.guardian else { return }
-            attacker.canAct = false
+            let guardian = victim!
             var damage = strikeDamage(attacker)
             if attacker.card.id == "h_joshua" {
                 damage += 2
@@ -279,38 +387,53 @@ final class MatchViewModel: ObservableObject {
             }
             deal(damage, to: guardian, from: attacker)           // Raid — no retaliation
             note("\(attacker.card.name) raids \(guardian.card.name)")
+            lunge = nil
+            await beat(340)
             fireRaid(attacker, b, defender: o)
+            await beat()                    // its Raid ability resolves
         }
-        settle()
+        await settle()
     }
 
-    func sacrifice(_ inst: CardInstance, on s: PlayerSide) {
+    func sacrifice(_ inst: CardInstance, on s: PlayerSide) async {
         let b = board(s), o = opp(s)
         guard canSacrifice(inst, on: s) else { return }
+        busy = true
+        defer { busy = false; bump() }
+
         removeFromPlay(inst, b)
         inst.zone = .altar
         b.altar.append(inst)
+        await beat(320)                     // the card arcs onto the Altar
 
         let (element, points) = sacrificeValue(inst, b)
         b.elements[element, default: 0] += points
+        cue(.points(element, points), side: s)
         note("\(name(of: s)) sacrifices \(inst.card.name) (+\(points) \(element.displayName) points)")
+        await beat(300)                     // the points drift to their counter
 
         fireSacrifice(inst, b)
 
         // Guard reactions to any Sacrifice.
         for h in b.basecamp where h.card.id == "farmer" {
-            h.buff(attack: 1, health: 0); note("Farmer grows stronger")
+            h.buff(attack: 1, health: 0)
+            cue(.buff(attack: 1, health: 0), on: h, side: s)
+            note("Farmer grows stronger")
         }
         for h in b.basecamp where h.card.id == "priest" && h.isDamaged {
-            h.healToFull(); note("Priest is restored")
+            let healed = h.damage
+            h.healToFull()
+            cue(.heal(healed), on: h, side: s)
+            note("Priest is restored")
         }
         if b.hasRelic("altar-of-fire"),
            let t = o.frontier.filter({ $0.isCreature }).randomElement() {
             deal(1, to: t, from: inst); note("Altar of Fire scorches \(t.card.name)")
         }
+        await beat()                        // its Sacrifice ability resolves
 
-        overcomeEvents(b)
-        settle()
+        await overcomeEvents(b)
+        await settle()
     }
 
     // MARK: Combat helpers
@@ -326,8 +449,14 @@ final class MatchViewModel: ObservableObject {
 
     private func deal(_ amount: Int, to c: CardInstance, from source: CardInstance? = nil) {
         guard amount > 0 else { return }
-        if c.shield { c.shield = false; c.shieldExpires = nil; return }
+        let side = owner(of: c)
+        if c.shield {
+            c.shield = false; c.shieldExpires = nil
+            cue(.shieldBreak, on: c, side: side)
+            return
+        }
         c.damage += amount
+        cue(.damage(amount), on: c, side: side)
         if c.health <= 0, c.killedBy == nil { c.killedBy = source }
     }
 
@@ -340,6 +469,7 @@ final class MatchViewModel: ObservableObject {
     /// that "destroy" a card route through here so Death always fires.
     private func destroy(_ inst: CardInstance, _ b: PlayerBoard) {
         removeFromPlay(inst, b)
+        inst.zone = .discard
         b.discard.append(inst)
         note("\(inst.card.name) falls")
         fireDeath(inst, b)
@@ -357,10 +487,36 @@ final class MatchViewModel: ObservableObject {
         return died
     }
 
+    /// Everything currently at or below 0 Health, across both boards.
+    private func dying() -> [(CardInstance, PlayerSide)] {
+        [you, foe].flatMap { b in b.allInPlay.filter { $0.health <= 0 }.map { ($0, b.side) } }
+    }
+
     /// Recompute auras, resolve any deaths they cause, and repeat until stable.
     /// Losing an aura can drop a card's max Health at or below its damage, which
     /// kills it, which can in turn remove another aura source.
-    private func settle() {
+    ///
+    /// Each pass of that loop is one **wave**, and each wave gets its own beats —
+    /// so "Locust stings X → X dies → Y loses Elder's aura → Y dies" plays out as
+    /// separate steps instead of collapsing into a single frame.
+    private func settle() async {
+        for _ in 0..<4 {
+            refreshAuras()
+            let doomed = dying()
+            if doomed.isEmpty { break }
+            for (c, side) in doomed { cue(.death, on: c, side: side) }
+            await beat(240)                 // the doomed cards flash
+            cleanupDeaths()
+            await beat(300)                 // and drop onto the discard
+        }
+        refreshAuras()
+        checkEnd()
+        bump()
+    }
+
+    /// The rules half of `settle()`, with no pauses — used at setup, where
+    /// there's no one watching and `init` can't await.
+    private func settleInstantly() {
         for _ in 0..<4 {
             refreshAuras()
             if !cleanupDeaths() { break }
@@ -425,18 +581,20 @@ final class MatchViewModel: ObservableObject {
     /// Events clear in order, one at a time. Clearing subtracts exactly the
     /// requirement (surplus carries), flushes the Altar, and reveals the next.
     /// Clears cascade while the banked points hold out.
-    private func overcomeEvents(_ b: PlayerBoard) {
+    private func overcomeEvents(_ b: PlayerBoard) async {
         while let idx = b.currentEventIndex,
               b.isUnlocked(idx),
               b.events[idx].affordable(by: b.elements) {
             let event = b.events[idx]
             for req in event.card.requirement { b.elements[req.element, default: 0] -= req.count }
             event.cleared = true
+            note("\(name(of: b.side)) overcame \(event.card.name)!")
+            await beat(420)                 // the Event slot stamps cleared
 
+            for c in b.altar { c.zone = .discard }
             b.discard.append(contentsOf: b.altar)
             b.altar.removeAll()
-
-            note("\(name(of: b.side)) overcame \(event.card.name)!")
+            await beat(320)                 // the Altar sweeps into the discard
 
             // Guard: Prophet draws whenever you overcome an Event.
             for h in b.basecamp where h.card.id == "prophet" {
@@ -495,7 +653,9 @@ final class MatchViewModel: ObservableObject {
             if b.humansMarchedThisTurn == 1 { drawCard(b); note("Herald draws") }
         case "fisherman", "h_peter":
             if b.allInPlay.contains(where: { $0.card.element == .sea }) {
-                inst.buffTemp(attack: 1, health: 1); note("\(inst.card.name) is emboldened")
+                inst.buffTemp(attack: 1, health: 1)
+                cue(.buff(attack: 1, health: 1), on: inst, side: b.side)
+                note("\(inst.card.name) is emboldened")
             }
         case "warrior-chief":
             inst.doubleDamageCharges = 1; note("Warrior Chief readies a heavy blow")
@@ -542,9 +702,15 @@ final class MatchViewModel: ObservableObject {
                 note("Serpent strikes down \(t.card.name)"); destroy(t, o)
             }
         case "golden-jackal":
-            blessHuman(b, where: { $0.card.discipline == .courage }) { $0.buff(attack: 1, health: 0) }
+            blessHuman(b, where: { $0.card.discipline == .courage }) {
+                $0.buff(attack: 1, health: 0)
+                self.cue(.buff(attack: 1, health: 0), on: $0, side: b.side)
+            }
         case "great-bear":
-            blessHuman(b, where: { $0.card.discipline == .strength }) { $0.buff(attack: 2, health: 3) }
+            blessHuman(b, where: { $0.card.discipline == .strength }) {
+                $0.buff(attack: 2, health: 3)
+                self.cue(.buff(attack: 2, health: 3), on: $0, side: b.side)
+            }
         case "raven":
             if blessHuman(b, where: { $0.card.discipline == .wisdom }, effect: { _ in }) != nil {
                 drawCard(b); note("Raven's wisdom draws a card")
@@ -552,7 +718,10 @@ final class MatchViewModel: ObservableObject {
         case "dove":
             blessHuman(b, where: { _ in true }) { $0.grantShield(until: nextTurn) }
         case "lamb":
-            blessHuman(b, where: { _ in true }) { $0.buff(attack: 0, health: 2) }
+            blessHuman(b, where: { _ in true }) {
+                $0.buff(attack: 0, health: 2)
+                self.cue(.buff(attack: 0, health: 2), on: $0, side: b.side)
+            }
         case "river-otter":
             if let i = b.discard.firstIndex(where: { $0.isHuman }) {
                 let h = b.discard.remove(at: i)
@@ -591,7 +760,10 @@ final class MatchViewModel: ObservableObject {
             }
         case "physician":
             let hurt = b.frontier.filter { $0.isHuman && $0 !== inst && $0.isDamaged }
-            for h in hurt { h.heal(2) }
+            for h in hurt {
+                h.heal(2)
+                cue(.heal(2), on: h, side: b.side)
+            }
             if !hurt.isEmpty { note("Physician's last work heals the Frontier") }
         case "h_samson":
             for board in [you, foe] {
