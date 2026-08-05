@@ -85,14 +85,87 @@ enum MatLayout {
                        y: side == .you ? 0.66 : 0.34)
     }
 
-    /// Hand cards fan across the printed hand panel, tightening as it fills.
-    static func handCenter(_ i: Int, of count: Int, for side: PlayerSide) -> CGPoint {
+    /// Where one hand card sits, and how far it's tilted.
+    struct HandSlot {
+        let center: CGPoint
+        let angle: Angle
+    }
+
+    /// The hand fans in a shallow arc rather than a flat row: cards tilt away
+    /// from the middle and the outer ones ride slightly lower, so a full hand of
+    /// seven reads as a spread of cards instead of a strip.
+    ///
+    /// `lifted` is the index of a card currently being picked up. Its neighbours
+    /// slide outward to leave a gap, and it straightens up itself.
+    static func handSlot(_ i: Int, of count: Int, for side: PlayerSide,
+                         lifted: Int? = nil) -> HandSlot {
         let anchor = center(.hand, for: side)
         // 0.075 clears the 0.071 card width, so a small hand doesn't overlap;
         // a full hand fans tighter to stay inside the printed panel.
         let spacing = min(0.075, 0.30 / CGFloat(max(count, 1)))
         let mid = CGFloat(count - 1) / 2
-        return CGPoint(x: anchor.x + (CGFloat(i) - mid) * spacing, y: anchor.y)
+        var offset = CGFloat(i) - mid
+
+        // Make room around the card being picked up.
+        if let lifted, lifted != i {
+            offset += (i < lifted ? -0.42 : 0.42)
+        }
+
+        // Tilt grows with distance from the middle; the arc dips the outer cards.
+        let spread = min(CGFloat(count - 1), 6) / 2          // cap the fan at ±3 steps
+        let t = spread == 0 ? 0 : offset / spread            // -1 … 1 across the hand
+        let tilt = i == lifted ? 0 : t * 7                   // degrees
+        let curve: CGFloat = 0.016
+        let dip = i == lifted ? 0 : t * t * curve            // outer cards ride lower
+
+        // The arc only ever pushes cards away from the middle of the screen, so
+        // the whole fan is nudged back by half the curve to keep the outermost
+        // card inside the printed hand panel rather than off the mat edge.
+        let dipSign: CGFloat = side == .you ? 1 : -1
+        let recentre = -curve / 2 * dipSign
+
+        return HandSlot(center: CGPoint(x: anchor.x + offset * spacing,
+                                        y: anchor.y + dip * dipSign + recentre),
+                        angle: .degrees(Double(tilt)))
+    }
+
+    // MARK: Drop regions
+    //
+    // Where a dragged card can be released. These are deliberately more generous
+    // than the printed slots — a Camp slot is only ~7% of the mat wide, which is
+    // about 60pt on a phone, and asking someone to hit that mid-drag would be
+    // miserable. Regions are in mat fractions, same space as everything else.
+
+    static func campRegion(_ side: PlayerSide) -> CGRect {
+        side == .you ? CGRect(x: 0.10, y: 0.53, width: 0.19, height: 0.36)
+                     : CGRect(x: 0.10, y: 0.12, width: 0.19, height: 0.36)
+    }
+
+    /// The open green band on one player's half.
+    static func frontierRegion(_ side: PlayerSide) -> CGRect {
+        side == .you ? CGRect(x: 0.33, y: 0.52, width: 0.38, height: 0.26)
+                     : CGRect(x: 0.33, y: 0.22, width: 0.38, height: 0.26)
+    }
+
+    static func manaRegion(_ side: PlayerSide) -> CGRect {
+        rect(around: center(.mana, for: side), width: 0.10, height: 0.24)
+    }
+
+    static func altarRegion(_ side: PlayerSide) -> CGRect {
+        rect(around: center(.altar, for: side), width: 0.13, height: 0.26)
+    }
+
+    /// Both Relic boxes as one target — which slot a Relic lands in is the
+    /// engine's business, not the player's.
+    static func relicRegion(_ side: PlayerSide) -> CGRect {
+        let a = center(.relic(0), for: side), b = center(.relic(1), for: side)
+        let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+        return rect(around: mid, width: abs(b.x - a.x) + cardSize.width + 0.02,
+                    height: cardSize.height + 0.04)
+    }
+
+    private static func rect(around c: CGPoint, width: CGFloat, height: CGFloat) -> CGRect {
+        CGRect(x: c.x - width / 2, y: c.y - height / 2, width: width, height: height)
     }
 
     // MARK: Mapping to the screen
@@ -116,6 +189,21 @@ enum MatLayout {
 
         func point(_ slot: Slot, _ side: PlayerSide) -> CGPoint {
             point(MatLayout.center(slot, for: side))
+        }
+
+        /// A fraction-space rect in view points.
+        func rect(_ f: CGRect) -> CGRect {
+            CGRect(x: origin.x + f.minX * size.width,
+                   y: origin.y + f.minY * size.height,
+                   width: f.width * size.width,
+                   height: f.height * size.height)
+        }
+
+        /// A card-sized hit area centred on a point already in view space.
+        /// Slightly generous, so a drag doesn't have to land dead centre.
+        func cardHitRect(at p: CGPoint) -> CGRect {
+            let w = card.width * 1.15, h = card.height * 1.15
+            return CGRect(x: p.x - w / 2, y: p.y - h / 2, width: w, height: h)
         }
 
         /// A card drawn at the printed slot size.

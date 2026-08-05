@@ -14,13 +14,21 @@ struct MiniCard: View {
     var showCost: Bool = false
     /// Cost after Guard/Relic discounts — may be lower than the printed cost.
     var cost: Int? = nil
-    var selected: Bool = false
     var playable: Bool = false
     var guardian: Bool = false
+    /// In the Frontier with its attack still unspent. Glows so you can see at a
+    /// glance which of your cards haven't swung yet this turn.
+    var readyToAttack: Bool = false
     /// Face-down — used for the opponent's hand and the Deck stack.
     var faceDown: Bool = false
     /// Set while the card is doomed, so it can flash before it leaves the board.
     var dying: Bool = false
+    /// Being carried by the player's finger — rides above the board, enlarged.
+    var lifted: Bool = false
+    /// A legal place to drop what's being dragged.
+    var validTarget: Bool = false
+    /// The target the finger is actually over.
+    var hovered: Bool = false
 
     var body: some View {
         ZStack {
@@ -33,28 +41,53 @@ struct MiniCard: View {
         .frame(width: w, height: h)
         .clipShape(RoundedRectangle(cornerRadius: h * 0.08, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: h * 0.08).strokeBorder(
-            borderColor, lineWidth: selected || playable || guardian ? 2.5 : 1))
+            borderColor, lineWidth: borderWidth))
         .overlay {
             // Impact flash — a doomed card whites out for its final beat.
             RoundedRectangle(cornerRadius: h * 0.08, style: .continuous)
                 .fill(.white)
                 .opacity(dying ? 0.55 : 0)
         }
-        .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
-        .scaleEffect(dying ? 0.88 : 1)
+        // A legal drop target glows; the one under the finger glows harder.
+        // Failing both, a card that still has its attack carries a soft orange
+        // glow, which goes out the moment it swings.
+        .shadow(color: hovered ? Theme.gold
+                     : (validTarget ? Theme.gold.opacity(0.65)
+                     : (readyToAttack ? Self.readyOrange.opacity(0.75) : .clear)),
+                radius: hovered ? 14 : (validTarget ? 8 : (readyToAttack ? 7 : 0)))
+        .shadow(color: .black.opacity(lifted ? 0.55 : 0.4),
+                radius: lifted ? 12 : 2, y: lifted ? 8 : 1)
+        .scaleEffect(dying ? 0.88 : (lifted ? 1.35 : (hovered ? 1.06 : 1)))
         .saturation(dying ? 0.2 : 1)
         .animation(.easeOut(duration: 0.22), value: dying)
+        .animation(.spring(response: 0.28, dampingFraction: 0.7), value: lifted)
+        .animation(.easeOut(duration: 0.15), value: hovered)
+        .animation(.easeOut(duration: 0.15), value: validTarget)
+        .animation(.easeOut(duration: 0.28), value: readyToAttack)
         .animation(.spring(response: 0.35, dampingFraction: 0.6), value: inst.attack)
         .animation(.spring(response: 0.35, dampingFraction: 0.6), value: inst.health)
         .animation(.spring(response: 0.30, dampingFraction: 0.7), value: inst.maxHealth)
         .animation(.easeOut(duration: 0.25), value: inst.shield)
     }
 
+    /// Warmer and brighter than the Guardian's orange. The two never appear
+    /// together — a Guardian sits in the Basecamp, and this only fires in the
+    /// Frontier — but they shouldn't read as the same state either.
+    private static let readyOrange = Color(red: 1.0, green: 0.58, blue: 0.16)
+
     private var borderColor: Color {
-        if selected { return Theme.gold }
+        if hovered || lifted { return Theme.gold }
+        if validTarget { return Theme.gold.opacity(0.8) }
+        if readyToAttack { return Self.readyOrange }
         if playable { return .green }
         if guardian { return .orange.opacity(0.9) }
         return .black.opacity(0.35)
+    }
+
+    private var borderWidth: CGFloat {
+        if hovered || lifted { return 3 }
+        if validTarget || readyToAttack || playable || guardian { return 2.5 }
+        return 1
     }
 
     private var cardBack: some View {

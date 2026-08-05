@@ -1,8 +1,12 @@
 import SwiftUI
 import UIKit
 
-/// Landscape match board laid out on the Playmat V3 template.
-/// Tap a hand card to play it; tap a Camp/Frontier card for its actions.
+/// Landscape match board laid out on the Playmat V4 template.
+///
+/// **Drag to act, tap to look.** A card is carried to where it should end up —
+/// hand to Camp to play, hand to the mana pinwheel to eat, Camp to Frontier to
+/// March, a Creature to the Altar to Sacrifice, a Frontier card onto an enemy to
+/// attack. Releasing without moving opens the card enlarged instead.
 ///
 /// Every position comes from `MatLayout`, and every card carries a
 /// `matchedGeometryEffect` keyed on its `CardInstance.id`, so a card moving
@@ -12,47 +16,47 @@ import UIKit
 struct TCGMatchView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = MatchViewModel()
-    @State private var chosen: CardInstance?
     /// Shared by every zone so cards can fly between them.
     @Namespace private var cardNS
 
+    @State private var drag: DragState?
+    /// Everywhere the held card could legally go, lit up on pickup.
+    @State private var validTargets: Set<DropTargetKey> = []
+    @State private var inspecting: CardInstance?
+
+    /// Coordinate space shared by the board layout and every drag gesture.
+    private static let boardSpace = "board"
+
+    /// The app is landscape-only (see `project.yml`), so the board never has to
+    /// ask iOS to rotate and there's no portrait state to fall back to.
     var body: some View {
         GeometryReader { geo in
-            let portrait = geo.size.height > geo.size.width
             ZStack {
                 Color(red: 0.12, green: 0.11, blue: 0.10).ignoresSafeArea()
 
-                if portrait {
-                    rotateHint
-                } else {
-                    let f = MatLayout.Frame(in: geo.size)
-                    board(f)
-                    logLine(f)
-                    CueOverlay(cues: vm.cues,
-                               anchor: { cueAnchor($0, f) },
-                               scale: f.size.height)
-                    controls
-                    if let c = chosen, !vm.busy { actionBar(for: c, in: geo.size) }
-                    if vm.awaitingHandoff, vm.winner == nil { handoffOverlay }
-                    if let w = vm.winner { resultOverlay(winner: w) }
+                let f = MatLayout.Frame(in: geo.size)
+                board(f)
+                logLine(f)
+                if let d = drag, d.moved, d.from == .frontier { aimLine(d, f) }
+                CueOverlay(cues: vm.cues,
+                           anchor: { cueAnchor($0, f) },
+                           scale: f.size.height)
+                controls
+                if vm.awaitingHandoff, vm.winner == nil { handoffOverlay }
+                if let w = vm.winner { resultOverlay(winner: w) }
+                if let inst = inspecting {
+                    CardInspector(inst: inst) { inspecting = nil }
                 }
             }
+            // Drags report their location in this space, so gesture coordinates
+            // and `MatLayout` slot positions are directly comparable. With
+            // `.local` a drag would report points relative to the card being
+            // dragged, and no drop target would ever match.
+            .coordinateSpace(name: Self.boardSpace)
         }
         .statusBarHidden()
-        .onAppear { requestOrientation(.landscape) }
-        .onDisappear { requestOrientation(.portrait) }
-        // A locked board can't have a live selection.
-        .onChange(of: vm.busy) { _, busy in if busy { chosen = nil } }
-    }
-
-    private var rotateHint: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "rotate.right.fill").font(.system(size: 44)).foregroundStyle(Theme.gold)
-            Text("Turn your phone sideways").font(.title3.bold()).foregroundStyle(.white)
-            Text("The Promised Land is played in landscape.")
-                .font(.footnote).foregroundStyle(.white.opacity(0.6))
-            Button("Leave") { dismiss() }.padding(.top, 8).foregroundStyle(Theme.gold)
-        }
+        // A locked board can't be holding a card.
+        .onChange(of: vm.busy) { _, busy in if busy { drag = nil; validTargets = [] } }
     }
 
     // MARK: Board
@@ -62,6 +66,8 @@ struct TCGMatchView: View {
             Image("playmat").resizable().scaledToFit()
                 .frame(width: f.size.width, height: f.size.height)
                 .position(x: f.origin.x + f.size.width / 2, y: f.origin.y + f.size.height / 2)
+
+            dropZones(f)
 
             ForEach([PlayerSide.foe, .you], id: \.self) { side in
                 piles(side, f)
@@ -97,8 +103,10 @@ struct TCGMatchView: View {
     private func camp(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
         let b = vm.board(side)
         ForEach(Array(b.basecamp.prefix(4).enumerated()), id: \.element.id) { i, c in
-            card(c, side: side, size: f.card, guardian: i == 0)
-                .position(f.point(.camp(i), side))
+            let p = f.point(.camp(i), side)
+            card(c, side: side, size: f.card, at: p, f, guardian: i == 0)
+                .position(p)
+                .zIndex(drag?.card.id == c.id ? 100 : 0)
         }
     }
 
@@ -106,9 +114,11 @@ struct TCGMatchView: View {
     private func frontier(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
         let b = vm.board(side)
         ForEach(Array(b.frontier.prefix(5).enumerated()), id: \.element.id) { i, c in
-            card(c, side: side, size: f.card)
+            let p = f.point(MatLayout.frontierCenter(i, of: b.frontier.count, for: side))
+            card(c, side: side, size: f.card, at: p, f)
                 .offset(lungeOffset(for: c, f))
-                .position(f.point(MatLayout.frontierCenter(i, of: b.frontier.count, for: side)))
+                .position(p)
+                .zIndex(drag?.card.id == c.id ? 100 : 0)
         }
     }
 
@@ -116,27 +126,93 @@ struct TCGMatchView: View {
     private func relics(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
         let b = vm.board(side)
         ForEach(Array(b.relics.prefix(2).enumerated()), id: \.element.id) { i, c in
-            card(c, side: side, size: f.relicCard)
-                .position(f.point(.relic(i), side))
+            let p = f.point(.relic(i), side)
+            card(c, side: side, size: f.relicCard, at: p, f)
+                .position(p)
+                .zIndex(drag?.card.id == c.id ? 100 : 0)
+        }
+    }
+
+    /// Where every card in play currently sits, so a drag can be aimed at one.
+    private func cardPositions(_ f: MatLayout.Frame) -> [UUID: CGPoint] {
+        var out: [UUID: CGPoint] = [:]
+        for side in [PlayerSide.you, .foe] {
+            let b = vm.board(side)
+            for (i, c) in b.basecamp.prefix(4).enumerated() {
+                out[c.id] = f.point(.camp(i), side)
+            }
+            for (i, c) in b.frontier.prefix(5).enumerated() {
+                out[c.id] = f.point(MatLayout.frontierCenter(i, of: b.frontier.count, for: side))
+            }
+        }
+        return out
+    }
+
+    /// Zones glow while a card is held so the legal destinations are visible
+    /// before the player commits to one.
+    @ViewBuilder
+    private func dropZones(_ f: MatLayout.Frame) -> some View {
+        if let d = drag, d.moved {
+            let side = vm.turnSide
+            let zones: [(DropTarget, CGRect)] = [
+                (.camp(side),     MatLayout.campRegion(side)),
+                (.relics(side),   MatLayout.relicRegion(side)),
+                (.mana(side),     MatLayout.manaRegion(side)),
+                (.frontier(side), MatLayout.frontierRegion(side)),
+                (.altar(side),    MatLayout.altarRegion(side)),
+            ]
+            ForEach(Array(zones.enumerated()), id: \.offset) { _, z in
+                if validTargets.contains(DropTargetKey(z.0)) {
+                    let hovered = d.target == z.0
+                    let r = f.rect(z.1)
+                    RoundedRectangle(cornerRadius: f.scaled(0.03), style: .continuous)
+                        .fill(Theme.gold.opacity(hovered ? 0.30 : 0.13))
+                        .overlay(RoundedRectangle(cornerRadius: f.scaled(0.03), style: .continuous)
+                            .strokeBorder(Theme.gold.opacity(hovered ? 0.95 : 0.5),
+                                          lineWidth: hovered ? 3 : 2))
+                        .frame(width: r.width, height: r.height)
+                        .position(x: r.midX, y: r.midY)
+                        .allowsHitTesting(false)
+                        .animation(.easeOut(duration: 0.15), value: hovered)
+                }
+            }
         }
     }
 
     /// Only the active player's hand is face-up — this is a hot-seat game.
+    /// Cards fan in an arc, and the one being picked up straightens while its
+    /// neighbours slide aside.
     @ViewBuilder
     private func hand(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
         let b = vm.board(side)
         let open = side == vm.turnSide && !vm.awaitingHandoff
+        let liftedIndex = b.hand.firstIndex { $0.id == drag?.card.id }
+
         ForEach(Array(b.hand.enumerated()), id: \.element.id) { i, c in
+            let slot = MatLayout.handSlot(i, of: b.hand.count, for: side, lifted: liftedIndex)
+            let held = drag?.card.id == c.id
+
+            // The gesture goes on the card itself, *before* `.position` — that
+            // modifier expands to fill its parent, so attaching a gesture after
+            // it would give every hand card a board-sized hit area.
             MiniCard(inst: c, w: f.card.width, h: f.card.height,
                      showCost: open,
                      cost: open ? vm.effectiveCost(c.card, for: b) : nil,
-                     selected: chosen?.id == c.id,
-                     playable: open && vm.canPlay(c, on: side),
+                     playable: open && drag == nil && vm.canPlay(c, on: side),
                      faceDown: !open,
-                     dying: isDying(c))
+                     dying: isDying(c),
+                     lifted: held)
                 .matchedGeometryEffect(id: c.id, in: cardNS)
-                .onTapGesture { if open { chosen = (chosen?.id == c.id) ? nil : c } }
-                .position(f.point(MatLayout.handCenter(i, of: b.hand.count, for: side)))
+                .rotationEffect(held ? .zero : slot.angle)
+                .offset(held ? drag!.translation : .zero)
+                .contentShape(Rectangle())
+                .gesture(cardGesture(c, from: .hand, at: f.point(slot.center), f,
+                                     draggable: open))
+                .position(f.point(slot.center))
+                // zIndex has to sit on the ZStack's actual child — the
+                // positioned container — so a held card draws above the rest.
+                .zIndex(held ? 100 : Double(i))
+                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: liftedIndex)
         }
     }
 
@@ -172,7 +248,6 @@ struct TCGMatchView: View {
         let live = vm.winner == nil && !vm.awaitingHandoff && !vm.busy
         return Button {
             Task { await vm.endTurn() }
-            chosen = nil
         } label: {
             RoundedRectangle(cornerRadius: f.scaled(0.02), style: .continuous)
                 .fill(Theme.sage.opacity(live ? 0.28 : 0))
@@ -184,14 +259,104 @@ struct TCGMatchView: View {
         .position(f.point(.end, .you))
     }
 
+    /// A card in play. Yours can be picked up; the foe's can only be aimed at
+    /// (and tapped to read).
     @ViewBuilder
     private func card(_ inst: CardInstance, side: PlayerSide, size: CGSize,
+                      at anchor: CGPoint, _ f: MatLayout.Frame,
                       guardian: Bool = false) -> some View {
+        let held = drag?.card.id == inst.id
+        let key = DropTargetKey(.card(inst.id))
+        let isValid = drag != nil && validTargets.contains(key)
+        let isHovered = drag?.target == .card(inst.id)
+        // Yours, in the Frontier, attack unspent. Basecamp cards also carry
+        // `canAct` but have to March before they can fight, and the foe's keep
+        // whatever they ended their own turn with — hence all three clauses.
+        let ready = side == vm.turnSide && inst.zone == .frontier && inst.canAct
+
         MiniCard(inst: inst, w: size.width, h: size.height,
-                 selected: chosen?.id == inst.id, guardian: guardian,
-                 dying: isDying(inst))
+                 guardian: guardian,
+                 readyToAttack: ready,
+                 dying: isDying(inst),
+                 lifted: held,
+                 validTarget: isValid,
+                 hovered: isHovered && isValid)
             .matchedGeometryEffect(id: inst.id, in: cardNS)
-            .onTapGesture { tap(inst, side: side) }
+            .offset(held ? drag!.translation : .zero)
+            .contentShape(Rectangle())
+            .gesture(cardGesture(inst, from: inst.zone, at: anchor, f,
+                                 draggable: side == vm.turnSide))
+    }
+
+    // MARK: Drag
+
+    /// One gesture handles pick-up, carry and drop — and a release that barely
+    /// moved is a tap, which opens the inspector. Stacking a separate
+    /// `onTapGesture` alongside a `DragGesture` makes them fight over the touch,
+    /// so both live here.
+    private func cardGesture(_ inst: CardInstance, from zone: MatchZone,
+                             at anchor: CGPoint, _ f: MatLayout.Frame,
+                             draggable: Bool = true) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.boardSpace))
+            .onChanged { g in
+                guard !vm.busy, vm.winner == nil, !vm.awaitingHandoff else { return }
+                guard draggable else { return }
+
+                if drag?.card.id != inst.id {
+                    drag = DragState(card: inst, from: zone, origin: anchor)
+                    validTargets = resolver(f).validTargets(for: inst)
+                }
+                guard var d = drag else { return }
+                d.translation = g.translation
+                if d.exceedsThreshold(g.translation) { d.moved = true }
+                d.target = d.moved ? resolver(f).target(at: g.location, dragging: inst) : nil
+                drag = d
+            }
+            .onEnded { g in
+                defer { drag = nil; validTargets = [] }
+
+                // Barely moved, or not ours to move: a tap. Read the card.
+                guard draggable, let d = drag, d.moved else {
+                    inspecting = inst
+                    return
+                }
+                let target = resolver(f).target(at: g.location, dragging: inst)
+                guard let action = resolver(f).action(dropping: inst, on: target) else { return }
+                perform(action, with: inst)
+            }
+    }
+
+    private func resolver(_ f: MatLayout.Frame) -> DragResolver {
+        DragResolver(vm: vm, frame: f, positions: cardPositions(f))
+    }
+
+    private func perform(_ action: DropAction, with inst: CardInstance) {
+        let side = vm.turnSide
+        Task {
+            switch action {
+            case .play:      await vm.play(inst, on: side)
+            case .eat:       await vm.eat(inst, on: side)
+            case .march:     await vm.march(inst, on: side)
+            case .sacrifice: await vm.sacrifice(inst, on: side)
+            case .attack(let id):
+                let foe = vm.board(side == .you ? .foe : .you)
+                let target = id.flatMap { tid in foe.frontier.first { $0.id == tid } }
+                await vm.attack(inst, target: target, on: side)
+            }
+        }
+    }
+
+    /// A line from the attacker toward whatever the finger is over, so a Raid
+    /// reads as aiming rather than as dragging a card off the board.
+    private func aimLine(_ d: DragState, _ f: MatLayout.Frame) -> some View {
+        let hit = d.target != nil
+        return Path { p in
+            p.move(to: d.origin)
+            p.addLine(to: d.location)
+        }
+        .stroke(hit ? Theme.gold : Theme.gold.opacity(0.45),
+                style: StrokeStyle(lineWidth: hit ? 5 : 3, lineCap: .round, dash: hit ? [] : [8, 7]))
+        .allowsHitTesting(false)
     }
 
     // MARK: Animation support
@@ -224,7 +389,7 @@ struct TCGMatchView: View {
                 return f.point(.relic(min(i, 1)), side)
             }
             if let i = b.hand.firstIndex(where: { $0.id == id }) {
-                return f.point(MatLayout.handCenter(i, of: b.hand.count, for: side))
+                return f.point(MatLayout.handSlot(i, of: b.hand.count, for: side).center)
             }
             if b.altar.contains(where: { $0.id == id }) { return f.point(.altar, side) }
             if b.discard.contains(where: { $0.id == id }) { return f.point(.discard, side) }
@@ -326,7 +491,7 @@ struct TCGMatchView: View {
     /// action bar, which claims the same spot when a card is selected.
     @ViewBuilder
     private func logLine(_ f: MatLayout.Frame) -> some View {
-        if chosen == nil, let last = vm.log.last {
+        if drag == nil, let last = vm.log.last {
             Text(last)
                 .font(.system(size: f.scaled(0.036), weight: .semibold))
                 .foregroundStyle(.white.opacity(0.95))
@@ -339,66 +504,6 @@ struct TCGMatchView: View {
         }
     }
 
-    private func actionBar(for c: CardInstance, in size: CGSize) -> some View {
-        let side = vm.turnSide
-        return HStack(spacing: 10) {
-            if c.zone == .hand {
-                if vm.canPlay(c, on: side) {
-                    actionButton("Play", "hand.tap.fill") { Task { await vm.play(c, on: side) }; chosen = nil }
-                }
-                if vm.canEat(c, on: side) {
-                    actionButton("Eat", "leaf.fill") { Task { await vm.eat(c, on: side) }; chosen = nil }
-                }
-                if !vm.canPlay(c, on: side) && !vm.canEat(c, on: side) {
-                    Text(vm.activeBoard.ateThisTurn ? "Already ate this turn" : "Not enough mana")
-                        .font(.caption2.bold()).foregroundStyle(.white)
-                }
-            } else if c.zone == .basecamp {
-                if vm.canMarch(c, on: side) {
-                    actionButton("March", "figure.walk") { Task { await vm.march(c, on: side) }; chosen = nil }
-                }
-                if vm.canSacrifice(c, on: side) {
-                    actionButton("Sacrifice", "flame.fill") { Task { await vm.sacrifice(c, on: side) }; chosen = nil }
-                }
-            } else if c.zone == .frontier {
-                if c.canAct && (vm.inactiveBoard.frontier.isEmpty || c.unblockable) {
-                    actionButton("Raid", "bolt.fill") { Task { await vm.attack(c, target: nil, on: side) }; chosen = nil }
-                } else if c.canAct {
-                    Text("Tap an enemy").font(.caption2.bold()).foregroundStyle(.white)
-                }
-                if vm.canSacrifice(c, on: side) {
-                    actionButton("Sacrifice", "flame.fill") { Task { await vm.sacrifice(c, on: side) }; chosen = nil }
-                }
-            }
-            actionButton("Cancel", "xmark") { chosen = nil }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .position(x: size.width / 2, y: size.height * 0.5)
-    }
-
-    private func actionButton(_ title: String, _ icon: String, _ act: @escaping () -> Void) -> some View {
-        Button(action: act) {
-            Label(title, systemImage: icon).font(.caption2.bold())
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(Theme.bark.opacity(0.85), in: Capsule())
-                .foregroundStyle(.white)
-        }
-    }
-
-    /// `side` is the owner of the tapped card. You act on your own cards and
-    /// attack the other side's Frontier.
-    private func tap(_ inst: CardInstance, side: PlayerSide) {
-        guard vm.winner == nil, !vm.awaitingHandoff, !vm.busy else { return }
-        if side != vm.turnSide {
-            if let atk = chosen, atk.zone == .frontier, inst.zone == .frontier {
-                Task { await vm.attack(atk, target: inst, on: vm.turnSide) }
-                chosen = nil
-            }
-            return
-        }
-        chosen = (chosen?.id == inst.id) ? nil : inst
-    }
 
     /// Shown between turns so the next player can take the phone without
     /// seeing the previous player's hand.
@@ -414,7 +519,6 @@ struct TCGMatchView: View {
                     .font(.footnote).foregroundStyle(.white.opacity(0.6))
                 Button {
                     Task { await vm.confirmHandoff() }
-                    chosen = nil
                 } label: {
                     Text("I'm \(vm.name(of: next)) — Ready")
                         .font(.headline).padding(.horizontal, 26).padding(.vertical, 12)
@@ -440,10 +544,4 @@ struct TCGMatchView: View {
         }
     }
 
-    private func requestOrientation(_ mask: UIInterfaceOrientationMask) {
-        guard let scene = UIApplication.shared.connectedScenes
-            .first(where: { $0 is UIWindowScene }) as? UIWindowScene else { return }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
-        scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-    }
 }
