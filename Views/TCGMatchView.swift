@@ -4,7 +4,7 @@ import UIKit
 /// Landscape match board laid out on the Playmat V4 template.
 ///
 /// **Drag to act, tap to look.** A card is carried to where it should end up —
-/// hand to Camp to play, hand to the mana pinwheel to eat, Camp to Frontier to
+/// hand to Camp to play, hand to the Mana Pool to convert, Camp to Frontier to
 /// March, a Creature to the Altar to Sacrifice, a Frontier card onto an enemy to
 /// attack. Releasing without moving opens the card enlarged instead.
 ///
@@ -36,6 +36,7 @@ struct TCGMatchView: View {
 
                 let f = MatLayout.Frame(in: geo.size)
                 board(f)
+                convertingCard(f)
                 logLine(f)
                 if let d = drag, d.moved, d.from == .frontier { aimLine(d, f) }
                 CueOverlay(cues: vm.cues,
@@ -133,6 +134,25 @@ struct TCGMatchView: View {
         }
     }
 
+    /// A card being converted, caught mid-dissolve over the Mana Pool.
+    ///
+    /// It carries the same `matchedGeometryEffect` id it had in hand, so it
+    /// flies to the Pool rather than jumping there, then shrinks away — cards in
+    /// the Pool are spent, so there's nothing to show once it lands.
+    @ViewBuilder
+    private func convertingCard(_ f: MatLayout.Frame) -> some View {
+        if let inst = vm.converting {
+            let side = vm.turnSide
+            MiniCard(inst: inst, w: f.card.width, h: f.card.height)
+                .matchedGeometryEffect(id: inst.id, in: cardNS)
+                .scaleEffect(0.35)
+                .opacity(0)
+                .position(f.point(.manaPool, side))
+                .allowsHitTesting(false)
+                .transition(.identity)
+        }
+    }
+
     /// Where every card in play currently sits, so a drag can be aimed at one.
     private func cardPositions(_ f: MatLayout.Frame) -> [UUID: CGPoint] {
         var out: [UUID: CGPoint] = [:]
@@ -157,7 +177,7 @@ struct TCGMatchView: View {
             let zones: [(DropTarget, CGRect)] = [
                 (.camp(side),     MatLayout.campRegion(side)),
                 (.relics(side),   MatLayout.relicRegion(side)),
-                (.mana(side),     MatLayout.manaRegion(side)),
+                (.manaPool(side), MatLayout.manaPoolRegion(side)),
                 (.frontier(side), MatLayout.frontierRegion(side)),
                 (.altar(side),    MatLayout.altarRegion(side)),
             ]
@@ -216,11 +236,11 @@ struct TCGMatchView: View {
         }
     }
 
-    /// Mana / berries beside the Frontier, plus the three element counters.
+    /// The Mana Pool readout beside the Frontier, plus the three element counters.
     @ViewBuilder
     private func readouts(_ side: PlayerSide, _ f: MatLayout.Frame) -> some View {
         let b = vm.board(side)
-        manaHex("\(b.mana)/\(b.berries)", f.point(.mana, side), f)
+        manaHex("\(b.mana)/\(b.maxMana)", f.point(.manaPool, side), f)
         ForEach([Element.air, .land, .sea], id: \.self) { e in
             counter("\(b.elements[e] ?? 0)", f.point(.element(e), side), f)
         }
@@ -335,7 +355,7 @@ struct TCGMatchView: View {
         Task {
             switch action {
             case .play:      await vm.play(inst, on: side)
-            case .eat:       await vm.eat(inst, on: side)
+            case .convert:   await vm.convert(inst, on: side)
             case .march:     await vm.march(inst, on: side)
             case .sacrifice: await vm.sacrifice(inst, on: side)
             case .attack(let id):
@@ -403,7 +423,7 @@ struct TCGMatchView: View {
         if let id = cue.card { return position(of: id, f) }
         switch cue.kind {
         case .points(let e, _): return f.point(.element(e), cue.side)
-        case .berry:            return f.point(.mana, cue.side)
+        case .manaGained:       return f.point(.manaPool, cue.side)
         default:                return nil
         }
     }

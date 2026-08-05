@@ -68,9 +68,10 @@ private struct CueLabel: View {
             .foregroundStyle(.white)
             .padding(.horizontal, scale * 0.016).padding(.vertical, scale * 0.006)
             .background(e.color.opacity(0.95), in: Capsule())
-        case .berry:
-            Image(systemName: "leaf.fill")
-                .font(.system(size: scale * 0.05)).foregroundStyle(Theme.sage)
+        case .manaGained:
+            Image(systemName: "drop.fill")
+                .font(.system(size: scale * 0.05))
+                .foregroundStyle(Color(red: 0.35, green: 0.72, blue: 0.95))
         case .draw:
             EmptyView()      // the card itself flying from the deck is the cue
         }

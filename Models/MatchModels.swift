@@ -4,12 +4,12 @@ import Foundation
 //
 // Rules from Resources/bible-tcg-rules.md / cards.json:
 // zones Basecamp(4, slot 0 = Guardian) / Frontier(5) / Altar; hand 7; mana comes
-// from berries you gain by eating cards; overcome your 3 Events in order by
+// from cards you convert into your Mana Pool; overcome your 3 Events in order by
 // banking element points from Sacrificing Creatures; lose if your Basecamp empties.
 
 enum PlayerSide { case you, foe }
 
-enum MatchZone { case deck, hand, basecamp, frontier, altar, discard }
+enum MatchZone { case deck, hand, basecamp, frontier, altar, discard, manaPool }
 
 /// A short-lived visual cue — a floating damage number, a shield shattering, a
 /// point gain drifting toward its counter. Board state records that a card took
@@ -25,13 +25,13 @@ struct VisualCue: Identifiable {
         case shieldBreak
         case death
         case points(Element, Int)
-        case berry
+        case manaGained
         case draw
     }
 
     let id = UUID()
     /// The `CardInstance` this cue belongs to, or `nil` for board-level cues
-    /// (a berry gained, points banked) which anchor to their player's counter.
+    /// (mana gained, points banked) which anchor to their player's counter.
     let card: UUID?
     let side: PlayerSide
     let kind: Kind
@@ -122,10 +122,16 @@ final class PlayerBoard {
     var discard: [CardInstance] = []
     var relics: [CardInstance] = []
 
-    /// Berries are permanent mana crystals, gained only by eating a card.
-    /// Mana refills to the berry count at the start of each of your turns.
+    /// Cards converted to mana. This is a **separate zone from the discard** —
+    /// a converted card never returns to hand, deck or discard, and its own text
+    /// does nothing while it sits here. Only its existence counts. That
+    /// separation is what stops discard recursion (River Otter) recovering it.
+    var manaPool: [CardInstance] = []
+
+    /// Mana available right now. Refills to the Pool's size each of your turns.
     var mana = 0
-    var berries = 0
+    /// One mana per card in the Pool.
+    var maxMana: Int { manaPool.count }
 
     var elements: [Element: Int] = [.air: 0, .sea: 0, .land: 0]
     var events: [EventProgress] = []
@@ -135,7 +141,7 @@ final class PlayerBoard {
     var everDeployed = false
 
     // Per-turn counters, reset in beginTurn.
-    var ateThisTurn = false
+    var convertedThisTurn = false
     var playedCardThisTurn = false
     var humansMarchedThisTurn = 0
     var owlShieldGivenThisTurn = false

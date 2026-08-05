@@ -23,7 +23,7 @@ enum MatLayout {
     static let cardSize = CGSize(width: 0.071, height: 0.152)
 
     enum Slot {
-        case deck, discard, altar, mana, hand, end
+        case deck, discard, altar, manaPool, hand, end
         case camp(Int)              // 0…3 — slot 0 is the Guardian
         case relic(Int)             // 0…1
         case event(Int)             // 0…2, where 2 is the shared finale
@@ -49,7 +49,7 @@ enum MatLayout {
             let rows: [CGFloat] = mine ? [0.618, 0.795] : [0.209, 0.385]
             return CGPoint(x: col, y: rows[min(i / 2, 1)])
 
-        case .mana:
+        case .manaPool:
             return CGPoint(x: 0.329, y: mine ? 0.871 : 0.107)
 
         case .hand:
@@ -147,8 +147,8 @@ enum MatLayout {
                      : CGRect(x: 0.33, y: 0.22, width: 0.38, height: 0.26)
     }
 
-    static func manaRegion(_ side: PlayerSide) -> CGRect {
-        rect(around: center(.mana, for: side), width: 0.10, height: 0.24)
+    static func manaPoolRegion(_ side: PlayerSide) -> CGRect {
+        rect(around: center(.manaPool, for: side), width: 0.10, height: 0.24)
     }
 
     static func altarRegion(_ side: PlayerSide) -> CGRect {

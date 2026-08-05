@@ -38,6 +38,11 @@ final class MatchViewModel: ObservableObject {
 
     struct Lunge { let attacker: UUID; let target: UUID?; let side: PlayerSide }
 
+    /// A card mid-conversion. It's already in the Pool as far as the rules are
+    /// concerned; this just holds it for one beat so the view can fly it to the
+    /// Pool and dissolve it, rather than having it blink out of the hand.
+    @Published private(set) var converting: CardInstance?
+
     /// Skips every animation pause, so the headless probe runs at full speed and
     /// no cue-expiry tasks are left dangling. Set by `Tests/EngineProbe.swift`.
     var instant = false
@@ -75,7 +80,7 @@ final class MatchViewModel: ObservableObject {
     private let basecampMax = 4
     private let frontierMax = 5
     private let relicMax = 2
-    private let berryMax = 10
+    private let poolMax = 10
 
     init() { setup() }
 
@@ -133,8 +138,8 @@ final class MatchViewModel: ObservableObject {
         turnSide = s
         let b = board(s)
 
-        b.mana = b.berries                  // refill to your berry count — no free ramp
-        b.ateThisTurn = false
+        b.mana = b.maxMana                  // refill to your Pool size — no free ramp
+        b.convertedThisTurn = false
         b.playedCardThisTurn = false
         b.humansMarchedThisTurn = 0
         b.owlShieldGivenThisTurn = false
@@ -144,7 +149,7 @@ final class MatchViewModel: ObservableObject {
             if c.refreshesShield { c.shield = true; c.shieldExpires = nil }
         }
         drawCard(b)
-        note("\(name(of: s)) — turn \(turnNumber), \(b.mana)/\(b.berries) mana")
+        note("\(name(of: s)) — turn \(turnNumber), \(b.mana)/\(b.maxMana) mana")
     }
 
     private func beginTurn(_ s: PlayerSide) async {
@@ -207,32 +212,37 @@ final class MatchViewModel: ObservableObject {
         return inst
     }
 
-    // MARK: Mana — berries
+    // MARK: Mana — the Mana Pool
 
-    /// Once per turn you may eat a card from hand for a permanent berry.
-    func canEat(_ inst: CardInstance, on s: PlayerSide) -> Bool {
+    /// Once per turn you may convert a card from hand into your Mana Pool.
+    func canConvert(_ inst: CardInstance, on s: PlayerSide) -> Bool {
         let b = board(s)
         guard winner == nil, !awaitingHandoff, !busy else { return false }
-        return !b.ateThisTurn && b.berries < berryMax && b.hand.contains { $0.id == inst.id }
+        return !b.convertedThisTurn && b.maxMana < poolMax && b.hand.contains { $0.id == inst.id }
     }
 
-    func eat(_ inst: CardInstance, on s: PlayerSide) async {
+    /// Convert a card to mana. It goes to the **Pool, not the discard** — the
+    /// two are separate zones, so a converted card can never be recovered.
+    func convert(_ inst: CardInstance, on s: PlayerSide) async {
         let b = board(s)
-        guard canEat(inst, on: s), let idx = b.hand.firstIndex(where: { $0.id == inst.id }) else { return }
+        guard canConvert(inst, on: s),
+              let idx = b.hand.firstIndex(where: { $0.id == inst.id }) else { return }
         busy = true
-        defer { busy = false; bump() }
+        defer { busy = false; converting = nil; bump() }
 
         b.hand.remove(at: idx)
-        inst.zone = .discard
-        b.discard.append(inst)
-        b.ateThisTurn = true
-        await beat(260)              // the eaten card leaves the hand
+        inst.zone = .manaPool
+        b.manaPool.append(inst)
+        b.convertedThisTurn = true
+        // Held for one beat so the view can fly it to the Pool and dissolve it.
+        converting = inst
+        await beat(300)
 
-        b.berries += 1
-        b.mana += 1                  // the new berry is usable the same turn
-        cue(.berry, side: s)
-        note("\(name(of: s)) eats \(inst.card.name) — \(b.berries) berr\(b.berries == 1 ? "y" : "ies")")
-        await beat(240)              // the berry counter ticks up
+        converting = nil
+        b.mana += 1                  // the new mana is usable the same turn
+        cue(.manaGained, side: s)
+        note("\(name(of: s)) converts \(inst.card.name) — \(b.maxMana) mana")
+        await beat(240)              // the mana readout ticks up
         await settle()
     }
 

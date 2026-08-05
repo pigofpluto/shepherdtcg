@@ -3,7 +3,7 @@ import Foundation
 
 /// A stacked board for checking animation and layout by eye.
 ///
-/// Reaching combat in a real match takes seven turns of ramping berries, which
+/// Reaching combat in a real match takes seven turns of ramping the Mana Pool, which
 /// makes visual iteration on the choreography painfully slow. This drops you
 /// straight into a position with cards in every zone, mana to spend, and an
 /// Event one Sacrifice away from clearing.
@@ -58,15 +58,22 @@ enum DebugSandbox {
         place(["craftsman", "elder", "lion"], into: .basecamp, on: you)
         place(["soldier", "wild-boar", "sparrow"], into: .frontier, on: you)
         place(["locust", "great-fish", "kraken", "camel"], into: .hand, on: you)
-        you.berries = 8
-        you.mana = 8
 
         // Them: something to hit, and something that hits back.
         place(["h_goliath", "watchman"], into: .basecamp, on: foe)
         place(["watchman", "griffin-vulture"], into: .frontier, on: foe)
         place(["soldier", "raven"], into: .hand, on: foe)
-        foe.berries = 8
-        foe.mana = 8
+
+        // Mana comes from the size of the Pool, so it has to be stocked with
+        // real cards rather than set as a number.
+        for b in [you, foe] {
+            for _ in 0..<8 {
+                guard let filler = make("watchman") else { continue }
+                filler.zone = .manaPool
+                b.manaPool.append(filler)
+            }
+            b.mana = b.maxMana
+        }
 
         // One Sacrifice short of clearing Event 1, so the Altar sweep and the
         // badge stamp can be watched without grinding points.

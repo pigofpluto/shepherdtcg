@@ -21,11 +21,24 @@ func card(_ id: String, turn: Int = 1) -> CardInstance {
 @MainActor
 func poke(_ vm: MatchViewModel, _ side: PlayerSide) async {
     let b = vm.board(side)
-    b.ateThisTurn = false
-    b.berries = 0
+    b.convertedThisTurn = false
+    b.manaPool.removeAll()
     let filler = card("sparrow")
     b.hand.append(filler)
-    await vm.eat(filler, on: side)
+    await vm.convert(filler, on: side)
+}
+
+/// Stock a Mana Pool directly. Mana is derived from the Pool's size, so tests
+/// that just need spendable mana have to put cards in it rather than set a number.
+@MainActor
+func fillPool(_ b: PlayerBoard, _ n: Int) {
+    b.manaPool.removeAll()
+    for _ in 0..<n {
+        let c = card("watchman")
+        c.zone = .manaPool
+        b.manaPool.append(c)
+    }
+    b.mana = b.maxMana
 }
 
 @MainActor
@@ -50,25 +63,41 @@ struct Probe {
     @MainActor static func main() async {
 
         // ─────────────────────────────────────────────────────────────
-        section("Mana — berries")
+        section("Mana — the Mana Pool")
         do {
             let vm = MatchViewModel()
             vm.instant = true
-            check("starts at 0 berries", vm.you.berries == 0 && vm.you.mana == 0)
+            check("starts with an empty Pool", vm.you.maxMana == 0 && vm.you.mana == 0)
             let c = vm.you.hand[0]
-            check("can eat on turn 1", vm.canEat(c, on: .you))
-            await vm.eat(c, on: .you)
-            check("eating gives 1 berry, usable now", vm.you.berries == 1 && vm.you.mana == 1)
-            check("eaten card goes to discard", vm.you.discard.contains { $0 === c })
-            check("cannot eat twice in a turn", !vm.canEat(vm.you.hand[0], on: .you))
+            check("can convert on turn 1", vm.canConvert(c, on: .you))
+            await vm.convert(c, on: .you)
+            check("converting gives 1 mana, usable now", vm.you.maxMana == 1 && vm.you.mana == 1)
+            // The Pool is a separate zone from the discard — this is what stops
+            // discard recursion recovering a card you spent as mana.
+            check("converted card is in the Pool", vm.you.manaPool.contains { $0 === c })
+            check("converted card is NOT in the discard", !vm.you.discard.contains { $0 === c })
+            check("cannot convert twice in a turn", !vm.canConvert(vm.you.hand[0], on: .you))
 
             await vm.endTurn(); await vm.confirmHandoff()          // -> Player 2
-            check("P2 still at 0 berries", vm.foe.berries == 0)
+            check("P2's Pool is still empty", vm.foe.maxMana == 0)
             await vm.endTurn(); await vm.confirmHandoff()          // -> Player 1
-            check("berry persists and refills", vm.you.berries == 1 && vm.you.mana == 1)
+            check("Pool persists and mana refills", vm.you.maxMana == 1 && vm.you.mana == 1)
 
-            vm.you.berries = 10
-            check("cannot eat at the 10-berry cap", !vm.canEat(vm.you.hand[0], on: .you))
+            fillPool(vm.you, 10)
+            check("cannot convert at the 10-card Pool cap", !vm.canConvert(vm.you.hand[0], on: .you))
+        }
+        do {
+            // The interaction the rules call out by name: River Otter returns a
+            // Human from your *discard*, and a converted card never goes there.
+            let vm = freshMatch()
+            let otter = card("river-otter")
+            vm.you.frontier.append(otter); otter.zone = .frontier
+            let human = card("craftsman")
+            vm.you.hand.append(human)
+            await vm.convert(human, on: .you)
+            await vm.sacrifice(otter, on: .you)
+            check("River Otter cannot recover a converted Human",
+                  !vm.you.hand.contains { $0 === human } && vm.you.manaPool.contains { $0 === human })
         }
 
         // ─────────────────────────────────────────────────────────────
@@ -453,7 +482,7 @@ struct Probe {
         }
         do {
             let vm = freshMatch()
-            vm.you.berries = 10; vm.you.mana = 10
+            fillPool(vm.you, 10)
             let jael = card("h_jael")
             vm.you.hand.append(jael)
             let healthy = card("behemoth-calf"), hurt = card("leviathan")
@@ -469,7 +498,7 @@ struct Probe {
         section("Relics")
         do {
             let vm = freshMatch()
-            vm.you.berries = 10; vm.you.mana = 10
+            fillPool(vm.you, 10)
             vm.you.relics.append(contentsOf: [card("watchtower"), card("fish-net")])
             let third = card("altar-of-fire")
             vm.you.hand.append(third)
@@ -477,7 +506,7 @@ struct Probe {
         }
         do {
             let vm = freshMatch()
-            vm.you.berries = 10; vm.you.mana = 10
+            fillPool(vm.you, 10)
             vm.you.relics.append(card("scroll-of-wisdom"))
             vm.you.deck = Array(repeating: CardLibrary.card(id: "sparrow")!, count: 5)
             // Watchman is Wisdom and vanilla, so the only draw can be the Scroll's.
@@ -490,7 +519,7 @@ struct Probe {
 
             // Control: a Courage Human gets nothing from the Scroll.
             let vmC = freshMatch()
-            vmC.you.berries = 10; vmC.you.mana = 10
+            fillPool(vmC.you, 10)
             vmC.you.relics.append(card("scroll-of-wisdom"))
             vmC.you.deck = Array(repeating: CardLibrary.card(id: "sparrow")!, count: 5)
             let esther = card("h_esther")         // Courage, vanilla besides Shield
@@ -501,7 +530,7 @@ struct Probe {
         }
         do {
             let vm = freshMatch()
-            vm.you.berries = 10; vm.you.mana = 10
+            fillPool(vm.you, 10)
             vm.you.relics.append(card("banner-of-courage"))
             vm.you.basecamp.append(card("craftsman"))          // anchor so the wall allows a March
             vm.you.basecamp[0].zone = .basecamp

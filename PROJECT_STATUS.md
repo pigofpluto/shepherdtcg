@@ -15,7 +15,7 @@ text uses only terms defined there. Read it before changing any card.
 ```bash
 xcodegen generate                     # after adding/removing source files
 open BibleTCG.xcodeproj               # then ⌘R
-./Tests/run-probe.sh                  # 77 headless engine checks
+./Tests/run-probe.sh                  # 79 headless engine checks
 ```
 
 `Tests/` is deliberately **not** in `project.yml` sources, so it never ships in
@@ -58,12 +58,9 @@ what it says.
 
 ### Phase 2 — Mechanics corrections
 
-- **Mana is now berries.** The engine used to auto-ramp (`maxMana + 1`, free,
-  every turn). It now matches the design: you start at **0**, and once per turn
-  you may **eat** a card from hand for a permanent berry, usable the same turn.
-  Mana refills to your berry count each turn; cap 10, after which eating stops.
-  `cards.json` had specified this all along (`discardForManaPerTurn`) — the
-  engine had simply never implemented it.
+- **Mana stopped auto-ramping.** The engine used to hand out `maxMana + 1` free
+  every turn. It now costs you a card. *(That first landed as "berries"; it is
+  now the Mana Pool — see below.)*
 - **Altar is a real zone.** Sacrificed Creatures go there, not straight to the
   discard. Clearing an Event flushes it.
 - **Events unlock one at a time.** Only Event 1 starts face-up; clearing it
@@ -104,9 +101,9 @@ what it says.
 | Module | State |
 |---|---|
 | `Models/TCGCard.swift` | Stable. Card data + `Discipline` / `Element` / `TCGCardType`. |
-| `Models/MatchModels.swift` | Rewritten. Layered stats, Altar zone, berries, per-turn counters, Event unlock helpers. |
+| `Models/MatchModels.swift` | Layered stats, Altar and Mana Pool zones, per-turn counters, Event unlock helpers. |
 | `Services/CardLibrary.swift` | 87 cards (25 Creatures, 44 Humans, 8 Relics, 10 Events). All text follows the canon. |
-| `ViewModels/MatchViewModel.swift` | Rewritten. Full turn loop, berries, auras, all triggers. |
+| `ViewModels/MatchViewModel.swift` | Full turn loop, Mana Pool, auras, all triggers, async beats. |
 | `Views/TCGMatchView.swift` | Rewritten for Playmat V4. Positions come from `MatLayout`; every card carries `matchedGeometryEffect`. |
 | `Views/MatLayout.swift` | New. The single table of board positions, in mat fractions. |
 | `Views/MiniCard.swift` | New. Extracted from `TCGMatchView`; animates its own stat changes. |
@@ -116,7 +113,7 @@ what it says.
 | `Views/TCGCardView.swift` | Unchanged behaviour; rename fallout only. |
 | `Views/CardCollectionView.swift` | Unchanged behaviour; rename fallout only. |
 | `Resources/` | Rules + cards.json are canon. **Not bundled** — design docs only, not loaded at runtime. |
-| `Tests/` | 77 headless engine checks, now `async`. |
+| `Tests/` | 79 headless engine checks, `async`. |
 | `import-art.py` | Now knows all 87 ids (the 3 discipline Relics were missing). |
 
 ---
@@ -162,8 +159,8 @@ four simplified abilities above. This is the single largest remaining gap.
 and neither has playtest data behind it:
 - Creature-only targeting means **Humans in the Frontier can only be removed by
   combat**. Samson and Golden Jackal are notably weaker than they read.
-- Berry mana makes ramp cost cards. Games start much slower — turn 1 is now
-  always "eat, pass".
+- Mana Pool ramp costs cards. Games start much slower — turn 1 is now
+  always "convert, pass".
 
 **Stat formula drift.** All 40 original starter cards satisfy `Human ATK+HP =
 2×cost` / `Creature = 2×cost − 1`. **20 of the 24 restored named Humans do not**
@@ -194,6 +191,103 @@ Raven — were resolved **in favour of the Swift version**, since that's what ru
 
 ---
 
+## Mana — the Mana Pool
+
+Berries are gone. Cards are **converted** into a **Mana Pool**, one per turn,
+usable the same turn, capped at 10 cards. Drag a card from hand onto the blue
+pool panel; it flies there and dissolves.
+
+The engine was the last thing still using berries — `bible-tcg-rules.md` and
+`cards.json` already described this system in full, so this change made the code
+match the canon rather than inventing anything.
+
+**The Pool is a separate zone from the discard**, and that is the point of it. A
+converted card is spent permanently and cannot be recovered, so River Otter
+(`Sacrifice: Return a Human from your discard to your hand`) can no longer fish
+it back. `PlayerBoard.manaPool` holds the cards and `maxMana` is derived from its
+count — there is no separate counter to drift.
+
+The probe pins both halves: a converted card is in the Pool *and* not in the
+discard, plus a dedicated River Otter regression check.
+
+Still unbuilt from `docs/superpowers/specs/2026-07-28-mana-pool-and-retargeting-design.md`:
+the preparing phase (so the Pool starts empty rather than with 1 card), draw-2,
+the "Frontier card" targeting rework, Event-unlocked Relics, and printed element
+values.
+
+---
+
+## Interaction — drag to act, tap to look
+
+There is no action menu any more. A card is carried to where it should end up,
+and every action has a printed destination on the mat:
+
+| Action | Drag from | Drop on |
+|---|---|---|
+| Play | hand | your Camp (Relics → your Relic slots) |
+| Convert to mana | hand | your Mana Pool |
+| March | your Camp | your Frontier |
+| Sacrifice | Camp / Frontier Creature | your Altar stone |
+| Attack | your Frontier | an enemy Frontier card |
+| Raid | your Frontier | the enemy Guardian |
+
+Releasing without moving (under 12pt) is a **tap**, which opens the card
+enlarged via `CardInspector` — board cards are ~60pt wide, so their ability text
+is unreadable in play. It reuses `TCGCardView`, the ornate frame the Collection
+screen draws, and shows live attack/health underneath when auras, damage or
+Blessings have moved them off the printed values.
+
+The hand fans in an arc (`MatLayout.handSlot`): cards tilt away from the middle,
+outer ones ride lower, and picking one up straightens it while its neighbours
+slide aside to leave a gap.
+
+`Views/BoardDrag.swift` holds this as plain logic — `DragResolver` reads the
+board and says what a drop *would* do, without mutating anything. Legality is
+never re-implemented there: it defers to `canPlay` / `canConvert` / `canMarch` /
+`canSacrifice` and the same guards inside `attack`, so the rules keep one home.
+The same resolver drives the pickup highlight, so what glows and what actually
+works cannot disagree.
+
+**Two SwiftUI traps this hit, both worth remembering:**
+
+- `DragGesture` must use a **named coordinate space** shared with the layout.
+  With `.local` a drag reports points relative to the card being dragged, so no
+  drop target ever matches and every drag silently does nothing.
+- The gesture must be attached **before** `.position()`. That modifier expands to
+  fill its parent, so a gesture applied after it gives the card a board-sized hit
+  area and every card fights every other. `zIndex`, conversely, has to go
+  *after* `.position()` — it only affects the ZStack's direct child.
+
+---
+
+## Orientation and the start menu
+
+The app is **landscape-only from launch**, declared in `project.yml`
+(`UISupportedInterfaceOrientations` for both iPhone and iPad). Nothing asks iOS
+to rotate at runtime any more.
+
+That replaced a real trap. The match view used to call `requestGeometryUpdate`
+on appear and show a "turn your phone sideways" hint until it took effect — but
+iOS can refuse that request, and when it does the game is simply unreachable. It
+was refused *always* on iPad and intermittently on the iPhone simulator. Locking
+the plist deletes the failure mode rather than working around it, so
+`requestOrientation` and the hint are both gone.
+
+`HomeView` was rebuilt for the wide, short canvas that leaves: **SHEPHERD TCG**
+across the top, then **Co-op Play** (the existing hot-seat match — same rules,
+just the name the menu uses for it) and **Collection** side by side, with the
+card-count stats along the bottom. `HomeButton` became a squarer card since two
+now sit next to each other. `CardCollectionView`'s grid went from a fixed two
+columns to `.adaptive`, which would otherwise render two enormous cards across an
+874pt-wide window.
+
+The app's display name is now **Shepherd TCG**. The bundle identifier stays
+`com.bibletcg.app` and the Xcode target stays `BibleTCG` — changing the
+identifier would make it a different app to iOS, breaking the installed copy and
+any future App Store identity, for no visible gain.
+
+---
+
 ## Movement & animation — done
 
 The board no longer snaps. Effects resolve as a visible sequence, and the layout
@@ -202,7 +296,7 @@ destinations, and V3/V4 is the first layout that prints one for every zone).
 
 ### 1. The engine pauses — `MatchViewModel`
 
-`play`, `march`, `attack`, `sacrifice`, `eat`, `endTurn`, `confirmHandoff`,
+`play`, `march`, `attack`, `sacrifice`, `convert`, `endTurn`, `confirmHandoff`,
 `beginTurn` and `settle` are **`async`**. They stop at each moment worth seeing:
 
 ```swift
@@ -268,7 +362,7 @@ divider, the one band that never holds a card, and steps aside for the action ba
 
 ### Checking it by eye
 
-Reaching combat in a real match takes seven turns of ramping berries. Instead:
+Reaching combat in a real match takes seven turns of ramping the Pool. Instead:
 
 ```bash
 xcrun simctl launch --terminate-running-process booted com.bibletcg.app --sandbox
@@ -279,7 +373,7 @@ Sacrifice from clearing. `#if DEBUG` and opt-in — a normal launch is unaffecte
 
 ### Verified
 
-Probe 77/77. On Playmat V3 in the simulator: eat, play, attack-and-kill, Sacrifice → Altar,
+Probe 79/79. In the simulator: convert, play, attack-and-kill, Sacrifice → Altar,
 Event clear → Altar sweep → badge stamp → next Event revealed, and Elder's aura
 applying to a Frontier Human. The aura *cascade* is covered by the probe
 ("aura retracts and kills the dependent card") rather than watched.
@@ -287,13 +381,9 @@ applying to a Frontier Human. The aura *cascade* is covered by the probe
 ### Known gaps
 
 - **No skip button**, by choice. If chains start to drag, it's one flag on `beat()`.
-- **Rotation is fragile.** `requestOrientation` relies on
-  `requestGeometryUpdate`, which iOS may simply refuse — it is *always* refused on
-  iPad (the rotate hint blocks play there), and it stopped landing on the iPhone
-  simulator mid-session with unchanged code. When it fails the game is
-  unreachable. The durable fix is to stop depending on the device rotating and
-  rotate the board content instead; the cheap one is `UIRequiresFullScreen`,
-  which costs iPad multitasking.
+- On iPad, iPadOS 26's resizable windows mean a landscape-only declaration isn't
+  the hard guarantee it is on iPhone — a tall window is still possible. Nothing
+  breaks: `MatLayout` aspect-fits, so the board just letterboxes smaller.
 - Opening hand appears rather than being dealt — `init` can't await.
 - Draw animations rely on the card appearing in hand; the Deck stack is drawn
   from a count, since the deck holds `[TCGCard]` and not live instances.

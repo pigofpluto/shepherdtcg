@@ -9,7 +9,7 @@ import SwiftUI
 enum DropTarget: Equatable {
     case camp(PlayerSide)
     case frontier(PlayerSide)
-    case mana(PlayerSide)
+    case manaPool(PlayerSide)
     case altar(PlayerSide)
     case relics(PlayerSide)
     case card(UUID)
@@ -45,7 +45,7 @@ struct DragState {
 /// the card springs back.
 enum DropAction: Equatable {
     case play
-    case eat
+    case convert
     case march
     case sacrifice
     case attack(UUID?)      // nil target = Raid the Guardian
@@ -70,7 +70,7 @@ struct DragResolver {
             if frame.cardHitRect(at: centre).contains(p) { return .card(id) }
         }
         let side = vm.turnSide
-        if frame.rect(MatLayout.manaRegion(side)).contains(p)   { return .mana(side) }
+        if frame.rect(MatLayout.manaPoolRegion(side)).contains(p) { return .manaPool(side) }
         if frame.rect(MatLayout.altarRegion(side)).contains(p)  { return .altar(side) }
         if frame.rect(MatLayout.relicRegion(side)).contains(p)  { return .relics(side) }
         if frame.rect(MatLayout.campRegion(side)).contains(p)   { return .camp(side) }
@@ -90,8 +90,8 @@ struct DragResolver {
         case (.hand, .relics(let s)) where s == side:
             return card.card.type == .relic && vm.canPlay(card, on: side) ? .play : nil
 
-        case (.hand, .mana(let s)) where s == side:
-            return vm.canEat(card, on: side) ? .eat : nil
+        case (.hand, .manaPool(let s)) where s == side:
+            return vm.canConvert(card, on: side) ? .convert : nil
 
         case (.basecamp, .frontier(let s)) where s == side:
             return vm.canMarch(card, on: side) ? .march : nil
@@ -113,7 +113,7 @@ struct DragResolver {
         var out: Set<DropTargetKey> = []
         let side = vm.turnSide
         let candidates: [DropTarget] = [
-            .camp(side), .relics(side), .mana(side), .frontier(side), .altar(side),
+            .camp(side), .relics(side), .manaPool(side), .frontier(side), .altar(side),
         ] + vm.board(side == .you ? .foe : .you).allInPlay.map { .card($0.id) }
 
         for t in candidates where action(dropping: card, on: t) != nil {
@@ -147,7 +147,7 @@ struct DropTargetKey: Hashable {
         switch t {
         case .camp(let s):     raw = "camp\(s)"
         case .frontier(let s): raw = "frontier\(s)"
-        case .mana(let s):     raw = "mana\(s)"
+        case .manaPool(let s): raw = "manaPool\(s)"
         case .altar(let s):    raw = "altar\(s)"
         case .relics(let s):   raw = "relics\(s)"
         case .card(let id):    raw = "card\(id)"

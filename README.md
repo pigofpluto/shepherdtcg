@@ -30,7 +30,7 @@ Bundle id `com.bibletcg.app`, iOS 17+. Verified building and running on the iPho
 | `Assets.xcassets/` | 26 imagesets — card art, 3 frames, playmat, card back |
 | `Art/Cards/` | 21 oil-painting card portraits (source files for the importer) |
 | `Art/Frames/` | Card-type overlays: `Human Overlay`, `animal card overlay`, `Event border V1`, backs, spare templates |
-| `Art/Playmat/` | `Playmat V2.png` — the landscape game board (2286×1274) |
+| `Art/Playmat/` | `playmat v4.jpg` — the landscape game board (4096×2240) |
 | `Resources/` | `bible-tcg-rules.md` + `cards.json` (design spec), Firefly art prompts |
 | `import-art.py` | Art → asset-catalog importer |
 
@@ -44,9 +44,12 @@ Bundle id `com.bibletcg.app`, iOS 17+. Verified building and running on the iPho
 
 **Zones:** Basecamp (max 4, slot 1 = **Guardian**, takes Raid damage) → Frontier (max 5) → Altar (sacrificed creatures).
 
-**Mana — berries:** you start at **0**. Once per turn you may **eat** a card from hand for a
-permanent berry, usable that same turn. Mana refills to your berry count each turn, capped at
-10. Ramping costs you cards.
+**Mana — the Mana Pool:** you start with an empty Pool. Once per turn you may **convert** a
+card from hand into your Mana Pool, and its mana is usable that same turn. Mana refills to the
+size of your Pool each turn, capped at 10 cards. Ramping costs you cards.
+
+The Pool is a **separate zone from the discard** — a converted card is spent permanently and
+can never be recovered, so discard recursion (River Otter) cannot reach it.
 
 **Core loop:** play cards to the Basecamp; **March** to the Frontier (must wait overnight
 unless it has *Charge*); attack; **Raid** the enemy Guardian when their Frontier is empty;
@@ -70,7 +73,7 @@ vocabulary**, and card text uses only terms defined there.
 - **21 cards have real art**; the rest render a tinted placeholder
 - **Playable hot-seat match** (2 players, one device, with a hand-hiding handoff screen)
 - Played in **landscape** on the playmat
-- `./Tests/run-probe.sh` runs 77 headless engine checks
+- `./Tests/run-probe.sh` runs 79 headless engine checks
 
 See `PROJECT_STATUS.md` for the full picture and open TODOs.
 
@@ -93,7 +96,7 @@ loads `UIImage(named: card.id)` and falls back to a tinted procedural placeholde
 - **No player-chosen targeting.** Abilities that say "target" or "chosen" auto-pick. Four
   abilities are simplified for the same reason — "look at the top card" resolves as a plain
   draw, "draw then discard" never discards, and Great Fish can't split its damage.
-- **Balance is untested** after the switch to berry mana and Creature-only targeting.
+- **Balance is untested** after the switch to Mana Pool ramp and Creature-only targeting.
 - No deck builder — decks are randomly generated from the card pool.
 - No AI opponent (was removed in favor of hot-seat for testing).
 - Cards lack flavor text and scripture references (these fields were dropped in a model rewrite).
