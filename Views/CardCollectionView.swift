@@ -9,8 +9,9 @@ struct CardCollectionView: View {
     @State private var attributeFilter: AttributeFilter = .all
     @State private var selected: TCGCard?
 
-    private let columns = [GridItem(.flexible(), spacing: 14),
-                           GridItem(.flexible(), spacing: 14)]
+    /// Adaptive rather than a fixed pair — the app is landscape-only, so this is
+    /// a wide canvas and two fixed columns would render each card enormous.
+    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 14)]
 
     private var filtered: [TCGCard] {
         CardLibrary.all.filter { card in

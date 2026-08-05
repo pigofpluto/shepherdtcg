@@ -24,9 +24,14 @@ targets:
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: "Bible TCG"
+        INFOPLIST_KEY_CFBundleDisplayName: "Shepherd TCG"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        # Landscape only, everywhere, from launch. The playmat is a wide board and
+        # every screen is laid out for it, so the app never asks iOS to rotate at
+        # runtime — that request could be refused, which used to leave the game
+        # stuck behind a "turn your phone sideways" hint with no way through.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
       configs:
         Debug:
