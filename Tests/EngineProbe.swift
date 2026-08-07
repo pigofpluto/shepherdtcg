@@ -42,10 +42,13 @@ func fillPool(_ b: PlayerBoard, _ n: Int) {
 }
 
 @MainActor
-func freshMatch() -> MatchViewModel {
+func freshMatch() async -> MatchViewModel {
     let vm = MatchViewModel()
     // Headless: no animation pauses, no cue-expiry tasks left dangling.
     vm.instant = true
+    // Cards are dealt by the preparing phase now, not by init. Run it so the
+    // match is in a playable state, then clear the board for the test to stack.
+    await vm.runPreparation()
     // Neutral three-element ladder so a single-element Sacrifice in a non-Event
     // test can't accidentally clear a randomly-dealt Event and flush the Altar.
     let inert = CardLibrary.card(id: "the-tribulation")!
@@ -54,6 +57,10 @@ func freshMatch() -> MatchViewModel {
         b.altar.removeAll(); b.discard.removeAll(); b.relics.removeAll()
         b.elements = [.air: 0, .sea: 0, .land: 0]
         b.events = (0..<3).map { EventProgress(inert, revealed: $0 == 0) }
+        // Preparation deployed a Basecamp and we just emptied it. Without this
+        // the next settle() calls the match lost on the empty-Basecamp rule, and
+        // every later action silently no-ops on its `winner == nil` guard.
+        b.everDeployed = false
     }
     return vm
 }
@@ -67,6 +74,7 @@ struct Probe {
         do {
             let vm = MatchViewModel()
             vm.instant = true
+            await vm.runPreparation()
             check("starts with an empty Pool", vm.you.maxMana == 0 && vm.you.mana == 0)
             let c = vm.you.hand[0]
             check("can convert on turn 1", vm.canConvert(c, on: .you))
@@ -89,7 +97,7 @@ struct Probe {
         do {
             // The interaction the rules call out by name: River Otter returns a
             // Human from your *discard*, and a converted card never goes there.
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let otter = card("river-otter")
             vm.you.frontier.append(otter); otter.zone = .frontier
             let human = card("craftsman")
@@ -101,9 +109,95 @@ struct Probe {
         }
 
         // ─────────────────────────────────────────────────────────────
+        section("Preparing phase")
+        do {
+            let vm = MatchViewModel()
+            vm.instant = true
+            await vm.runPreparation()
+
+            check("both Basecamps hold 2 cards",
+                  vm.you.basecamp.count == 2 && vm.foe.basecamp.count == 2)
+            check("every seeded card costs 1",
+                  (vm.you.basecamp + vm.foe.basecamp).allSatisfy { $0.card.cost == 1 })
+            check("seeded cards are face-up",
+                  (vm.you.basecamp + vm.foe.basecamp).allSatisfy { !$0.faceDown })
+            let first = vm.turnSide, second: PlayerSide = first == .you ? .foe : .you
+            check("both start at 0 mana", vm.you.maxMana == 0 && vm.foe.maxMana == 0)
+            check("the match is playable", vm.phase == .playing)
+            // Nothing is duplicated or lost: seeded cards and dealt cards both
+            // come out of the same 28.
+            check("cards are conserved out of the 28-card deck",
+                  [vm.you, vm.foe].allSatisfy { $0.deck.count + $0.basecamp.count + $0.hand.count == 28 })
+
+            // Going first is a real edge with a Pool that ramps every turn. The
+            // second player is dealt one extra card to offset it — which shows
+            // up when they actually take their first turn, since the player
+            // going first has already drawn theirs.
+            check("first player opens their turn with 4 cards",
+                  vm.board(first).hand.count == 4, "got \(vm.board(first).hand.count)")
+            await vm.endTurn(); await vm.confirmHandoff()
+            check("second player opens their turn one card ahead",
+                  vm.board(second).hand.count == 5, "got \(vm.board(second).hand.count)")
+        }
+
+        // ─────────────────────────────────────────────────────────────
+        section("Relics unlock from Events")
+        do {
+            let vm = MatchViewModel()
+            vm.instant = true
+            await vm.runPreparation()
+            check("both players hold 2 face-down Relics",
+                  vm.you.relics.count == 2 && vm.you.faceDownRelics.count == 2
+                      && vm.foe.faceDownRelics.count == 2)
+
+            // The whole reason `hasRelic` checks face-up: both Relics are on the
+            // board from turn 1, so without it every Relic in the game would be
+            // live before it was ever unlocked.
+            let inert = vm.you.relics.allSatisfy { !vm.you.hasRelic($0.card.id) }
+            check("a face-down Relic is inert", inert)
+
+            let target = vm.you.relics[0]
+            target.faceDown = false
+            check("turning it face-up switches it on", vm.you.hasRelic(target.card.id))
+        }
+        do {
+            let vm = await freshMatch()
+            let relics = MatchViewModel.buildRelics().map { c -> CardInstance in
+                let i = CardInstance(c, turn: 0); i.faceDown = true; return i
+            }
+            vm.you.relics = relics
+            // Two cheap Events so banked points clear both in one cascade — each
+            // clear must unlock a Relic, not one between them.
+            let cheap = CardLibrary.events.min { $0.requirement.count < $1.requirement.count }!
+            vm.you.events = [EventProgress(cheap, revealed: true),
+                             EventProgress(cheap, revealed: true),
+                             EventProgress(cheap, revealed: false)]
+            for req in cheap.requirement { vm.you.elements[req.element] = req.count * 2 }
+
+            let anchor = card("craftsman"); anchor.zone = .basecamp
+            vm.you.basecamp.append(anchor); vm.you.everDeployed = true
+            let sparrow = card("sparrow"); sparrow.zone = .frontier
+            vm.you.frontier.append(sparrow)
+            await vm.sacrifice(sparrow, on: .you)
+
+            check("a cascade of two clears unlocks two Relics",
+                  vm.you.events.prefix(2).allSatisfy(\.cleared)
+                      && vm.you.faceDownRelics.isEmpty,
+                  "cleared \(vm.you.events.prefix(2).filter(\.cleared).count), "
+                      + "\(vm.you.faceDownRelics.count) still face-down")
+        }
+        do {
+            let vm = await freshMatch()
+            fillPool(vm.you, 10)
+            let relic = card("watchtower")
+            vm.you.hand.append(relic)
+            check("Relics cannot be played from hand", !vm.canPlay(relic, on: .you))
+        }
+
+        // ─────────────────────────────────────────────────────────────
         section("Cost hooks")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let whale = card("whale")
             vm.you.basecamp.append(whale); whale.zone = .basecamp
             let kraken = CardLibrary.card(id: "kraken")!      // Sea, cost 6
@@ -116,7 +210,7 @@ struct Probe {
             vm.you.basecamp.append(camel); camel.zone = .basecamp
             check("Camel discounts Land Creatures", vm.effectiveCost(boar, for: vm.you) == 2)
 
-            let vm2 = freshMatch()
+            let vm2 = await freshMatch()
             vm2.you.relics.append(card("ark-of-the-covenant"))
             check("Ark discounts the first card", vm2.effectiveCost(boar, for: vm2.you) == 2)
             vm2.you.playedCardThisTurn = true
@@ -126,7 +220,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Guard auras")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let elder = card("elder"), soldier = card("soldier")
             vm.you.basecamp.append(elder); elder.zone = .basecamp
             vm.you.frontier.append(soldier); soldier.zone = .frontier
@@ -141,7 +235,7 @@ struct Probe {
                   vm.you.frontier.isEmpty && vm.you.discard.contains { $0 === soldier })
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let elder = card("elder", turn: 0), soldier = card("soldier")
             let filler = card("watchman")
             vm.you.basecamp.append(contentsOf: [elder, filler])
@@ -153,7 +247,7 @@ struct Probe {
             check("Guard switches off once it Marches", soldier.maxHealth == 2, "got \(soldier.maxHealth)")
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let lion = card("lion"), guardian = card("craftsman")
             vm.you.basecamp.append(contentsOf: [guardian, lion])
             guardian.zone = .basecamp; lion.zone = .basecamp
@@ -162,7 +256,7 @@ struct Probe {
             check("Lion does not buff itself when it isn't Guardian", lion.attack == 4)
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let deborah = card("h_deborah"), soldier = card("soldier")
             vm.you.basecamp.append(deborah); deborah.zone = .basecamp
             vm.you.frontier.append(soldier); soldier.zone = .frontier
@@ -174,7 +268,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Raid triggers")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let judge = card("judge", turn: 0)
             vm.you.frontier.append(judge); judge.zone = .frontier; judge.canAct = true
             let target = card("craftsman")
@@ -187,7 +281,7 @@ struct Probe {
             check("Raid damages the Guardian", target.damage == 4, "got \(target.damage)")
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let champion = card("champion", turn: 0)
             vm.you.frontier.append(champion); champion.zone = .frontier; champion.canAct = true
             let guardian = card("h_goliath"), weak = card("watchman"), mid = card("craftsman")
@@ -200,7 +294,7 @@ struct Probe {
             check("Champion spares the healthier one", mid.damage == 0)
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let soldier = card("soldier", turn: 0)
             vm.you.frontier.append(soldier); soldier.zone = .frontier; soldier.canAct = true
             let g = card("h_goliath"); vm.foe.basecamp.append(g); g.zone = .basecamp
@@ -214,7 +308,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Shield")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let kg = card("kings-guard")
             vm.you.basecamp.append(kg); kg.zone = .basecamp
             check("printed Shield starts up", kg.shield)
@@ -231,7 +325,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Creature-only targeting")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let locust = card("locust")
             vm.you.frontier.append(locust); locust.zone = .frontier
             let human = card("craftsman")
@@ -239,7 +333,7 @@ struct Probe {
             await vm.sacrifice(locust, on: .you)
             check("Locust cannot hit a Human in the Frontier", human.damage == 0)
 
-            let vm2 = freshMatch()
+            let vm2 = await freshMatch()
             let locust2 = card("locust")
             vm2.you.frontier.append(locust2); locust2.zone = .frontier
             let beast = card("behemoth-calf")
@@ -251,7 +345,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Death triggers")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let physician = card("physician"), other = card("craftsman")
             vm.you.frontier.append(contentsOf: [physician, other])
             physician.zone = .frontier; other.zone = .frontier
@@ -261,7 +355,7 @@ struct Probe {
             check("Physician's Death heals other Frontier Humans", other.damage == 1, "got \(other.damage)")
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let serpent = card("serpent")
             vm.you.frontier.append(serpent); serpent.zone = .frontier
             let vulture = card("griffin-vulture")     // Death: draw
@@ -276,7 +370,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Sacrifice points")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let kraken = card("kraken")
             vm.you.frontier.append(kraken); kraken.zone = .frontier
             let moses = card("h_moses")
@@ -300,7 +394,7 @@ struct Probe {
             check("Events 1 and 2 differ between players",
                   dealt.you.events[0].card.id != dealt.foe.events[0].card.id)
 
-            let vm = freshMatch()
+            let vm = await freshMatch()
 
             // Stack a known ladder: 3 Sea, then 3 Land, then the shared finale.
             vm.you.events = [EventProgress(CardLibrary.card(id: "the-great-flood")!, revealed: true),
@@ -320,7 +414,7 @@ struct Probe {
         }
         do {
             // Cascade: enough banked to clear Events 1 and 2 in one action.
-            let vm = freshMatch()
+            let vm = await freshMatch()
             vm.you.events = [EventProgress(CardLibrary.card(id: "the-great-flood")!, revealed: true),
                              EventProgress(CardLibrary.card(id: "walls-of-jericho")!, revealed: false),
                              EventProgress(CardLibrary.card(id: "the-tribulation")!, revealed: false)]
@@ -337,7 +431,7 @@ struct Probe {
         }
         do {
             // Full ladder to a win.
-            let vm = freshMatch()
+            let vm = await freshMatch()
             vm.you.events = [EventProgress(CardLibrary.card(id: "the-great-flood")!, revealed: true),
                              EventProgress(CardLibrary.card(id: "walls-of-jericho")!, revealed: false),
                              EventProgress(CardLibrary.card(id: "the-tribulation")!, revealed: false)]
@@ -352,19 +446,26 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Deck rules")
         do {
-            for _ in 0..<20 {
+            var sawRelic = false, shortOnOnes = false
+            for _ in 0..<200 {
                 let deck = MatchViewModel.buildDeck()
-                let relics = deck.filter { $0.type == .relic }.count
-                if relics > 2 { failed += 1; print("  FAIL deck had \(relics) relics"); break }
+                if deck.contains(where: { $0.type == .relic }) { sawRelic = true }
+                if deck.filter({ $0.cost == 1 }).count < 2 { shortOnOnes = true }
             }
-            check("decks never exceed 2 Relics", true)
-            check("deck is 30 cards", MatchViewModel.buildDeck().count == 30)
+            check("deck is 28 cards", MatchViewModel.buildDeck().count == 28)
+            // Relics are set aside face-down at game start, never shuffled in.
+            check("decks contain no Relics", !sawRelic)
+            // The preparing phase seeds the Basecamp from the deck's cost-1
+            // cards, and only 6 of 69 bodies qualify — an unconstrained deck
+            // comes up short about 1 game in 5.
+            check("every deck holds at least 2 cost-1 cards", !shortOnOnes)
+            check("a player is set aside exactly 2 Relics", MatchViewModel.buildRelics().count == 2)
         }
 
         // ─────────────────────────────────────────────────────────────
         section("March triggers")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let herald = card("herald", turn: 0), second = card("soldier", turn: 0)
             let anchor = card("craftsman", turn: 0)
             vm.you.basecamp.append(contentsOf: [anchor, herald, second])
@@ -378,7 +479,7 @@ struct Probe {
             check("Herald does not draw for the second", vm.you.hand.count == h)
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let fisherman = card("fisherman", turn: 0), anchor = card("craftsman", turn: 0)
             let crab = card("tide-pool-crab")                 // a Sea Creature in play
             vm.you.basecamp.append(contentsOf: [anchor, fisherman, crab])
@@ -389,7 +490,7 @@ struct Probe {
             check("the buff expires at end of turn", fisherman.attack == 3 && fisherman.maxHealth == 3)
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let chief = card("warrior-chief", turn: 0), anchor = card("craftsman", turn: 0)
             vm.you.basecamp.append(contentsOf: [anchor, chief])
             for c in vm.you.basecamp { c.zone = .basecamp }
@@ -399,7 +500,7 @@ struct Probe {
             check("Warrior Chief's first attack is doubled", wall.damage == 12, "got \(wall.damage)")
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let eagle = card("eagle", turn: 0), anchor = card("craftsman", turn: 0)
             vm.you.basecamp.append(contentsOf: [anchor, eagle])
             for c in vm.you.basecamp { c.zone = .basecamp }
@@ -414,7 +515,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Guard reactions")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let farmer = card("farmer"), priest = card("priest")
             vm.you.basecamp.append(contentsOf: [farmer, priest])
             for c in vm.you.basecamp { c.zone = .basecamp }
@@ -425,7 +526,7 @@ struct Probe {
             check("Priest heals to full on Sacrifice", priest.damage == 0)
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let hp = card("high-priest")
             vm.you.basecamp.append(hp); hp.zone = .basecamp
             let dove = card("dove"); vm.you.frontier.append(dove); dove.zone = .frontier
@@ -433,7 +534,7 @@ struct Probe {
             check("High Priest gains Shield when a Sacrifice targets it", hp.shield)
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let owl = card("owl"), h1 = card("soldier", turn: 0), h2 = card("centurion", turn: 0)
             vm.you.basecamp.append(contentsOf: [owl, h1, h2])
             for c in vm.you.basecamp { c.zone = .basecamp }
@@ -443,7 +544,7 @@ struct Probe {
             check("Owl does not shield the second", !h2.shield)
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let prophet = card("prophet")
             vm.you.basecamp.append(prophet); prophet.zone = .basecamp
             vm.you.events = [EventProgress(CardLibrary.card(id: "the-great-flood")!, revealed: true),
@@ -460,7 +561,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Death & removal detail")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let jackal = card("golden-jackal"), killer = card("leviathan")
             vm.you.frontier.append(jackal); jackal.zone = .frontier; jackal.canAct = true
             vm.foe.frontier.append(killer); killer.zone = .frontier
@@ -469,7 +570,7 @@ struct Probe {
             check("Golden Jackal bites its killer back", killer.damage == 4, "got \(killer.damage)")
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let samson = card("h_samson")
             vm.you.frontier.append(samson); samson.zone = .frontier
             let beast = card("leviathan"), human = card("h_goliath")
@@ -481,7 +582,7 @@ struct Probe {
             check("Samson spares Humans", human.damage == 0, "got \(human.damage)")
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             fillPool(vm.you, 10)
             let jael = card("h_jael")
             vm.you.hand.append(jael)
@@ -497,7 +598,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Relics")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             fillPool(vm.you, 10)
             vm.you.relics.append(contentsOf: [card("watchtower"), card("fish-net")])
             let third = card("altar-of-fire")
@@ -505,7 +606,7 @@ struct Probe {
             check("cannot play a third Relic", !vm.canPlay(third, on: .you))
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             fillPool(vm.you, 10)
             vm.you.relics.append(card("scroll-of-wisdom"))
             vm.you.deck = Array(repeating: CardLibrary.card(id: "sparrow")!, count: 5)
@@ -518,7 +619,7 @@ struct Probe {
                   vm.you.hand.count == before, "played -1, drew +1; got \(vm.you.hand.count) vs \(before)")
 
             // Control: a Courage Human gets nothing from the Scroll.
-            let vmC = freshMatch()
+            let vmC = await freshMatch()
             fillPool(vmC.you, 10)
             vmC.you.relics.append(card("scroll-of-wisdom"))
             vmC.you.deck = Array(repeating: CardLibrary.card(id: "sparrow")!, count: 5)
@@ -529,7 +630,7 @@ struct Probe {
             check("Scroll of Wisdom ignores non-Wisdom Humans", vmC.you.hand.count == beforeC - 1)
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             fillPool(vm.you, 10)
             vm.you.relics.append(card("banner-of-courage"))
             vm.you.basecamp.append(card("craftsman"))          // anchor so the wall allows a March
@@ -548,7 +649,7 @@ struct Probe {
         // ─────────────────────────────────────────────────────────────
         section("Sacrifice odds and ends")
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let sparrow = card("sparrow")
             vm.you.frontier.append(sparrow); sparrow.zone = .frontier
             vm.you.deck = [CardLibrary.card(id: "lion")!]
@@ -557,7 +658,7 @@ struct Probe {
             check("Sparrow draws on Sacrifice", vm.you.hand.count == before + 1)
         }
         do {
-            let vm = freshMatch()
+            let vm = await freshMatch()
             let otter = card("river-otter")
             vm.you.frontier.append(otter); otter.zone = .frontier
             let deadHuman = card("craftsman")

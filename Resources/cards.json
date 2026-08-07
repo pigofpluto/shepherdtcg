@@ -37,31 +37,32 @@
     "relicSlots": 2,
     "relicsPerDeck": 2,
     "manaPoolMax": 10,
-    "drawPerTurn": 2,
+    "drawPerTurn": 1,
     "deckConstruction": {
       "bodies": 28,
       "minimumCost1": 2,
-      "effect": "A deck is 28 bodies (Humans and Creatures) and must contain at least 2 cards costing 1, so the preparing phase can always be completed.",
+      "effect": "A deck is 28 bodies (Humans and Creatures) and must contain at least 2 cards costing 1, so the preparing phase can always seed a Basecamp.",
       "relics": "The 2 Relics are chosen separately and are NOT part of the 28. They begin the game face-down in the Relic slots."
     },
     "preparingPhase": {
-      "searchCost1": 2,
-      "draw": 5,
-      "convertToMana": 1,
-      "effect": "Before turn 1, both players search their deck for two cards costing 1 and place them in their Basecamp, shuffle, draw 5, convert 1 card to their Mana Pool, and keep the rest. Opening hand is 4.",
-      "guardian": "The order cards are placed sets the Basecamp slots, so the first card placed is the Guardian.",
-      "firstPlayer": "After both players prepare, flip a coin to decide who takes the first turn. Nothing currently compensates the second player."
+      "coinFlipFirst": true,
+      "openingHand": { "first": 3, "second": 4 },
+      "seedBasecamp": 2,
+      "seedIsRandom": true,
+      "effect": "Before turn 1: flip a coin for who goes first, then seed each Basecamp with 2 of that player's own cost-1 deck cards (chosen at random, flipped face-up) while the deck is still untouched, then deal opening hands (3 to the first player, 4 to the second — the extra card offsets going first). Seeding runs before dealing specifically so it always has the full deck's cost-1 cards available. No card is converted to mana during preparing. None of this is a player choice.",
+      "guardian": "The two seeded cards are placed in Basecamp order at random, so which one lands in slot 1 (the Guardian) is also random.",
+      "firstPlayer": "The coin flip happens first, before hands are dealt, so the draw can compensate for it. Nothing currently compensates further into the game — going first still has a Mana Pool tempo edge past turn 1."
     },
     "mana": {
       "zone": "Mana Pool — sits beside the hand. Every card in it is worth 1 mana.",
-      "startingPool": 1,
+      "startingPool": 0,
       "poolMax": 10,
       "convertPerTurn": 1,
       "convertEffect": "Once per turn you may convert a card from hand to your Mana Pool. Its mana is available the same turn you convert it. Converting is optional, but skipping it leaves you permanently a mana behind.",
       "permanence": "Cards in the Mana Pool are there permanently. They never return to hand, deck or discard, and the card's own text does nothing while it is mana — only its existence counts. The Mana Pool is NOT the discard, so discard recursion (River Otter) cannot recover converted cards.",
       "refill": "At the start of each of your turns your mana refills to the size of your Mana Pool.",
       "atCap": "At 10 cards the Pool is full and you can no longer convert.",
-      "curve": "Starting from the 1 card converted during the preparing phase, on turn N you have N + 1 mana available."
+      "curve": "The Pool starts empty — 0 mana on turn 1. Nothing is converted during preparing."
     },
     "basecampGuardian": "Basecamp slots are numbered 1-4 in the order cards are placed. The card in slot 1 is the Guardian and takes all incoming Raid damage. When the Guardian dies or leaves the Basecamp, every other card shifts up one slot, and whichever card is now in slot 1 becomes the new Guardian.",
     "frontierOverflow": "If the Frontier is at its 5-card max, a player can discard a card or Sacrifice a Creature to make room.",

@@ -12,6 +12,7 @@ final class MatchViewModel: ObservableObject {
     let you = PlayerBoard(side: .you)      // Player 1 (bottom of the mat)
     let foe = PlayerBoard(side: .foe)      // Player 2 (top of the mat)
 
+    @Published private(set) var phase: MatchPhase = .preparing
     @Published private(set) var turnSide: PlayerSide = .you
     @Published private(set) var turnNumber = 1
     @Published private(set) var winner: PlayerSide?
@@ -42,6 +43,27 @@ final class MatchViewModel: ObservableObject {
     /// concerned; this just holds it for one beat so the view can fly it to the
     /// Pool and dissolve it, rather than having it blink out of the hand.
     @Published private(set) var converting: CardInstance?
+
+    /// An Event clear waiting on the player to pick which Relic turns over.
+    ///
+    /// The engine is `async`, so asking a question is just suspending: it awaits
+    /// a continuation that the view resumes on tap. No separate state machine —
+    /// the rest of the Event clear picks up exactly where it left off.
+    @Published private(set) var relicChoice: RelicChoice?
+
+    struct RelicChoice {
+        let side: PlayerSide
+        let options: [CardInstance]
+        let resume: (CardInstance) -> Void
+    }
+
+    /// Called by the view when the player taps a Relic to turn over.
+    func chooseRelic(_ inst: CardInstance) {
+        guard let choice = relicChoice,
+              choice.options.contains(where: { $0.id == inst.id }) else { return }
+        relicChoice = nil
+        choice.resume(inst)
+    }
 
     /// Skips every animation pause, so the headless probe runs at full speed and
     /// no cue-expiry tasks are left dangling. Set by `Tests/EngineProbe.swift`.
@@ -89,9 +111,20 @@ final class MatchViewModel: ObservableObject {
 
     // MARK: Setup
 
+    /// Decks, Events and face-down Relics. No cards are dealt here — that's the
+    /// preparing phase, which needs to await and so can't run from `init`.
     private func setup() {
-        you.deck = Self.buildDeck()
-        foe.deck = Self.buildDeck()
+        for b in [you, foe] {
+            b.deck = Self.buildDeck()
+            // Relics sit face-down in their slots from the start, outside the
+            // deck. They're inert until an Event clear turns one up.
+            for card in Self.buildRelics() {
+                let inst = CardInstance(card, turn: 0)
+                inst.zone = .basecamp
+                inst.faceDown = true
+                b.relics.append(inst)
+            }
+        }
 
         // Events 1 and 2 are private per player; Event 3 is the shared finale.
         // Only Event 1 starts face-up — the rest unlock in order.
@@ -104,26 +137,101 @@ final class MatchViewModel: ObservableObject {
                       EventProgress(pool[3], revealed: false),
                       EventProgress(finale, revealed: false)]
 
-        for _ in 0..<3 { drawCard(you); drawCard(foe) }
-
         #if DEBUG
         // Opt-in stacked board for checking animation by eye — see DebugSandbox.
         if DebugSandbox.isRequested {
             DebugSandbox.apply(you: you, foe: foe, turn: turnNumber)
+            phase = .playing
+            beginTurnState(.you)
+            settleInstantly()
         }
         #endif
-
-        // `init` can't await, so turn 1 is dealt without pauses.
-        beginTurnState(.you)
-        settleInstantly()
     }
 
+    /// 28 bodies, **guaranteed to hold at least two costing 1**.
+    ///
+    /// The preparing phase seeds each Basecamp from the deck's cost-1 cards, and
+    /// only 6 of the 69 bodies cost 1 — an unconstrained draw comes up short
+    /// about one game in five, which would leave a player with no Basecamp.
     static func buildDeck() -> [TCGCard] {
-        // A 30-card starter: bodies plus at most 2 Relics, per the deck rules.
         let bodies = CardLibrary.creatures + CardLibrary.humans
-        var deck = Array(bodies.shuffled().prefix(28))
-        deck += CardLibrary.relics.shuffled().prefix(2)
-        return deck.shuffled()
+        let ones = bodies.filter { $0.cost == 1 }.shuffled()
+        let rest = bodies.filter { $0.cost != 1 }.shuffled()
+
+        let seeded = Array(ones.prefix(2))
+        let remainder = (Array(ones.dropFirst(2)) + rest).shuffled()
+        return (seeded + remainder.prefix(28 - seeded.count)).shuffled()
+    }
+
+    /// The 2 Relics set aside for a player. Never shuffled into the deck.
+    static func buildRelics() -> [TCGCard] {
+        Array(CardLibrary.relics.shuffled().prefix(2))
+    }
+
+    // MARK: The preparing phase
+
+    /// Runs once before turn 1, from a `.task` on the board view. Nothing here
+    /// needs a decision, so it plays as one animated sequence.
+    ///
+    /// The coin flip happens **first** so the draw can compensate for it: the
+    /// player going first takes 3 cards, the other takes 4. Going first is a real
+    /// edge with a Pool that ramps every turn, and the extra card is what offsets it.
+    func runPreparation() async {
+        guard phase == .preparing, !busy else { return }
+        busy = true
+        defer { busy = false; bump() }
+
+        // Deterministic headless, so the probe can reason about turn order.
+        let first: PlayerSide = instant ? .you : (Bool.random() ? .you : .foe)
+        turnSide = first
+        note("\(name(of: first)) wins the toss and goes first")
+        await beat(600)
+
+        // Seed both Basecamps *before* anything is dealt. `buildDeck()` only
+        // guarantees the deck holds 2+ cost-1 cards — it says nothing about
+        // where in the deck they land, so dealing first could draw one into a
+        // hand and leave the seed short. Seeding off an untouched deck is what
+        // actually makes the guarantee hold.
+        let second = opp(first).side
+        for side in [first, second] { await seedBasecamp(board(side)) }
+
+        // 3 to whoever goes first, 4 to the other — dealt alternately so both
+        // hands fill together.
+        for i in 0..<4 {
+            if i < 3 { drawCard(board(first)) }
+            drawCard(board(second))
+            await beat(190)
+        }
+        note("\(name(of: second)) draws an extra card for going second")
+        await beat(420)
+
+        phase = .playing
+        note("\(name(of: first)) — turn 1, 0/0 mana")
+        beginTurnState(first)
+        await beat(300)
+        await settle()
+    }
+
+    /// Two of the deck's cost-1 cards, at random, flipped into the Basecamp.
+    /// Slot 0 becomes the Guardian, so which lands first matters — it's random,
+    /// same as the pick.
+    private func seedBasecamp(_ b: PlayerBoard) async {
+        let ones = b.deck.enumerated().filter { $0.element.cost == 1 }.shuffled().prefix(2)
+        // Remove from the deck highest-index-first so earlier indices stay valid.
+        for (idx, card) in ones.sorted(by: { $0.offset > $1.offset }) {
+            b.deck.remove(at: idx)
+            let inst = CardInstance(card, turn: 0)
+            inst.zone = .basecamp
+            inst.enteredOn = 0          // old enough to March on turn 1
+            inst.faceDown = true
+            b.basecamp.append(inst)
+            b.everDeployed = true
+            await beat(260)             // it slides out of the deck, still face-down
+
+            inst.faceDown = false
+            note("\(name(of: b.side)) sets out \(card.name)")
+            await beat(340)             // and turns over
+        }
     }
 
     // MARK: Turn flow
@@ -264,7 +372,9 @@ final class MatchViewModel: ObservableObject {
         guard winner == nil, !awaitingHandoff, !busy else { return false }
         guard effectiveCost(inst.card, for: b) <= b.mana else { return false }
         switch inst.card.type {
-        case .relic:            return b.relics.count < relicMax
+        // Relics are never in hand — they're set aside face-down at game start
+        // and turned up by clearing Events.
+        case .relic:            return false
         case .human, .creature: return b.basecamp.count < basecampMax
         case .event:            return false      // events aren't played from hand
         }
@@ -283,26 +393,18 @@ final class MatchViewModel: ObservableObject {
         inst.enteredOn = turnNumber
         inst.canAct = inst.hasCharge
 
-        switch inst.card.type {
-        case .relic:
-            b.relics.append(inst)
-            inst.zone = .basecamp
-            note("\(name(of: s)) plays \(inst.card.name)")
-            await beat(300)                             // the Relic slides into its slot
-        default:
-            inst.zone = .basecamp
-            b.basecamp.append(inst)
-            b.everDeployed = true
-            note("\(name(of: s)) plays \(inst.card.name)")
-            await beat(300)                             // the card slides into Camp
+        inst.zone = .basecamp
+        b.basecamp.append(inst)
+        b.everDeployed = true
+        note("\(name(of: s)) plays \(inst.card.name)")
+        await beat(300)                                 // the card slides into Camp
 
-            // Scroll of Wisdom grants every Wisdom Human a Play: draw.
-            if inst.isHuman, inst.card.discipline == .wisdom, b.hasRelic("scroll-of-wisdom") {
-                drawCard(b); note("Scroll of Wisdom draws for \(inst.card.name)")
-            }
-            firePlay(inst, b)
-            await beat()                                // its Play ability resolves
+        // Scroll of Wisdom grants every Wisdom Human a Play: draw.
+        if inst.isHuman, inst.card.discipline == .wisdom, b.hasRelic("scroll-of-wisdom") {
+            drawCard(b); note("Scroll of Wisdom draws for \(inst.card.name)")
         }
+        firePlay(inst, b)
+        await beat()                                    // its Play ability resolves
         await settle()
     }
 
@@ -611,6 +713,12 @@ final class MatchViewModel: ObservableObject {
                 drawCard(b); note("Prophet draws")
             }
 
+            // Clearing an Event turns over one of your face-down Relics. This
+            // sits inside the cascade loop deliberately: banked points can clear
+            // Event 1 and the Event 2 it just revealed in one action, and that
+            // has to unlock a Relic for each — not one for both.
+            await unlockRelic(b)
+
             // Reveal the next Event on this board.
             if b.events.indices.contains(idx + 1) { b.events[idx + 1].revealed = true }
             // Unlocking Event 3 reveals it to BOTH players — it's the shared finale.
@@ -620,6 +728,30 @@ final class MatchViewModel: ObservableObject {
                 note("The Tribulation is revealed to both players")
             }
         }
+    }
+
+    /// Turn one face-down Relic up. With two left the player picks; with one
+    /// there's nothing to decide, so it just flips.
+    ///
+    /// The choice is only meaningful because the chooser shows both faces — decks
+    /// are random, so a player has no other way to know what they're holding.
+    private func unlockRelic(_ b: PlayerBoard) async {
+        let hidden = b.faceDownRelics
+        guard !hidden.isEmpty else { return }
+
+        let pick: CardInstance
+        if hidden.count == 1 || instant {
+            pick = hidden[0]
+        } else {
+            pick = await withCheckedContinuation { cont in
+                relicChoice = RelicChoice(side: b.side, options: hidden) { cont.resume(returning: $0) }
+                bump()
+            }
+        }
+
+        pick.faceDown = false
+        note("\(name(of: b.side)) unlocks \(pick.card.name)")
+        await beat(520)             // the Relic turns over in its slot
     }
 
     private func checkEnd() {

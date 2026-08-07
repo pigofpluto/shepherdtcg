@@ -45,6 +45,9 @@ struct TCGMatchView: View {
                 controls
                 if vm.awaitingHandoff, vm.winner == nil { handoffOverlay }
                 if let w = vm.winner { resultOverlay(winner: w) }
+                if let choice = vm.relicChoice {
+                    RelicChooser(choice: choice) { vm.chooseRelic($0) }
+                }
                 if let inst = inspecting {
                     CardInspector(inst: inst) { inspecting = nil }
                 }
@@ -56,6 +59,9 @@ struct TCGMatchView: View {
             .coordinateSpace(name: Self.boardSpace)
         }
         .statusBarHidden()
+        // The preparing phase deals the opening hands and seeds both Basecamps.
+        // It has to await, so it runs here rather than from the view model's init.
+        .task { await vm.runPreparation() }
         // A locked board can't be holding a card.
         .onChange(of: vm.busy) { _, busy in if busy { drag = nil; validTargets = [] } }
     }
@@ -176,7 +182,6 @@ struct TCGMatchView: View {
             let side = vm.turnSide
             let zones: [(DropTarget, CGRect)] = [
                 (.camp(side),     MatLayout.campRegion(side)),
-                (.relics(side),   MatLayout.relicRegion(side)),
                 (.manaPool(side), MatLayout.manaPoolRegion(side)),
                 (.frontier(side), MatLayout.frontierRegion(side)),
                 (.altar(side),    MatLayout.altarRegion(side)),
@@ -295,8 +300,9 @@ struct TCGMatchView: View {
         let ready = side == vm.turnSide && inst.zone == .frontier && inst.canAct
 
         MiniCard(inst: inst, w: size.width, h: size.height,
-                 guardian: guardian,
+                 guardian: guardian && !inst.faceDown,
                  readyToAttack: ready,
+                 faceDown: inst.faceDown,
                  dying: isDying(inst),
                  lifted: held,
                  validTarget: isValid,

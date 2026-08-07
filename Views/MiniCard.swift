@@ -32,12 +32,21 @@ struct MiniCard: View {
 
     var body: some View {
         ZStack {
+            // Swap face for back at the halfway point of the turn, so the card
+            // reads as flipping over rather than cross-fading. Serves both the
+            // Basecamp seeding and Relic unlocks.
+            //
+            // The back is counter-rotated: without it the container's 180° would
+            // render the back mirrored.
             if faceDown {
-                cardBack
+                cardBack.rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
             } else {
                 face
             }
         }
+        .rotation3DEffect(.degrees(faceDown ? 180 : 0),
+                          axis: (x: 0, y: 1, z: 0), perspective: 0.4)
+        .animation(.easeInOut(duration: 0.42), value: faceDown)
         .frame(width: w, height: h)
         .clipShape(RoundedRectangle(cornerRadius: h * 0.08, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: h * 0.08).strokeBorder(

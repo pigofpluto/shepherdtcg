@@ -9,6 +9,10 @@ import Foundation
 
 enum PlayerSide { case you, foe }
 
+/// Matches open with a scripted preparing phase — coin flip, opening hands, and
+/// two cost-1 cards flipped into each Basecamp — before either player can act.
+enum MatchPhase { case preparing, playing }
+
 enum MatchZone { case deck, hand, basecamp, frontier, altar, discard, manaPool }
 
 /// A short-lived visual cue — a floating damage number, a shield shattering, a
@@ -68,6 +72,11 @@ final class CardInstance: Identifiable {
     var killedBy: CardInstance?   // for Golden Jackal's Death trigger
     var enteredOn: Int            // turn it entered its current zone (overnight rule)
     var zone: MatchZone
+
+    /// Turned over. A face-down card is **inert** — its text does nothing and it
+    /// isn't visible to either player. Relics start this way and are turned up by
+    /// clearing Events; Basecamp cards are face-down only while being dealt.
+    var faceDown = false
 
     init(_ card: TCGCard, turn: Int) {
         self.card = card
@@ -153,7 +162,15 @@ final class PlayerBoard {
     var clearedCount: Int { events.filter { $0.cleared }.count }
     var hasWon: Bool { events.count == 3 && events.allSatisfy { $0.cleared } }
 
-    func hasRelic(_ id: String) -> Bool { relics.contains { $0.card.id == id } }
+    /// **Face-up only.** Both Relics sit in their slots from the first turn, so
+    /// without this guard every Relic effect in the game would be live before it
+    /// was ever unlocked. Every Relic ability routes through here.
+    func hasRelic(_ id: String) -> Bool {
+        relics.contains { $0.card.id == id && !$0.faceDown }
+    }
+
+    /// Relics still waiting on an Event clear.
+    var faceDownRelics: [CardInstance] { relics.filter(\.faceDown) }
 
     /// The Event currently being raced — the first uncleared one.
     var currentEventIndex: Int? { events.firstIndex { !$0.cleared } }

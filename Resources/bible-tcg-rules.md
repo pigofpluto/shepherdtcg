@@ -109,17 +109,22 @@ game face-down in your Relic slots. See *Relics* below.
 
 ## The preparing phase
 
-Before turn 1, both players prepare:
+Before turn 1:
 
-1. **Search your deck** for two cards costing 1 and place them in your Basecamp.
-   The order you place them sets the Basecamp slots, so the first card you place is
-   your **Guardian**.
-2. **Shuffle your deck.**
-3. **Draw 5.**
-4. **Convert 1 card** from your hand to your Mana Pool.
-5. **Keep the rest** — an opening hand of **4**.
+1. **Flip a coin** to decide who takes the first turn.
+2. **Seed each Basecamp**, off each player's full, untouched deck. Two of that
+   player's own cost-1 deck cards are chosen **at random** and placed in the
+   Basecamp face-down, then turned face-up. Which of the two lands in slot 0 —
+   the **Guardian** — is decided by the same random draw. This happens *before*
+   either hand is dealt, so it always has the full deck's cost-1 cards to draw
+   from.
+3. **Deal opening hands** — the player going first is dealt **3** cards, the
+   other player **4**. The extra card is compensation for going second: with a
+   Mana Pool that ramps every turn, going first is a real edge, and this is what
+   offsets it.
 
-Then **flip a coin** to decide who takes the first turn.
+Nothing here is a choice either player makes, so it plays out as one uninterrupted
+sequence.
 
 ## Mana — the Mana Pool
 
@@ -136,15 +141,15 @@ only its existence counts.
 At the start of each of your turns your mana refills to the size of your Mana Pool.
 At **10 cards** the Pool is full and you can no longer convert.
 
-You start the game with **1 card** in your Pool, converted during the preparing
-phase, so on turn N you have N + 1 mana available.
+You start the game with an **empty Pool** — 0 mana on turn 1. Nothing is
+converted during the preparing phase.
 
 Ramping costs you cards. Each conversion is a card you will never draw, play or
 Sacrifice.
 
 ## Drawing
 
-Draw **2 cards** at the start of each of your turns.
+Draw **1 card** at the start of each of your turns.
 
 ## Combat
 

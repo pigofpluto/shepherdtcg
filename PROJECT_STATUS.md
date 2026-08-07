@@ -1,6 +1,6 @@
 # Project Status
 
-**Last updated:** 2026-07-28
+**Last updated:** 2026-08-05
 
 Bible TCG — a 2-player hot-seat trading card game. Race to the Promised Land by
 overcoming 3 Events. iOS 17+, SwiftUI, generated with xcodegen.
@@ -15,7 +15,7 @@ text uses only terms defined there. Read it before changing any card.
 ```bash
 xcodegen generate                     # after adding/removing source files
 open BibleTCG.xcodeproj               # then ⌘R
-./Tests/run-probe.sh                  # 79 headless engine checks
+./Tests/run-probe.sh                  # 94 headless engine checks
 ```
 
 `Tests/` is deliberately **not** in `project.yml` sources, so it never ships in
@@ -113,7 +113,7 @@ what it says.
 | `Views/TCGCardView.swift` | Unchanged behaviour; rename fallout only. |
 | `Views/CardCollectionView.swift` | Unchanged behaviour; rename fallout only. |
 | `Resources/` | Rules + cards.json are canon. **Not bundled** — design docs only, not loaded at runtime. |
-| `Tests/` | 79 headless engine checks, `async`. |
+| `Tests/` | 94 headless engine checks, `async`. |
 | `import-art.py` | Now knows all 87 ids (the 3 discipline Relics were missing). |
 
 ---
@@ -211,9 +211,85 @@ The probe pins both halves: a converted card is in the Pool *and* not in the
 discard, plus a dedicated River Otter regression check.
 
 Still unbuilt from `docs/superpowers/specs/2026-07-28-mana-pool-and-retargeting-design.md`:
-the preparing phase (so the Pool starts empty rather than with 1 card), draw-2,
-the "Frontier card" targeting rework, Event-unlocked Relics, and printed element
-values.
+draw-2 and the "Frontier card" targeting rework. The preparing phase and
+Event-unlocked Relics are built — see below — but diverge from the spec's
+written version; the rules doc and `cards.json` were updated to match what
+actually shipped, not the other way round.
+
+---
+
+## The preparing phase and Event-unlocked Relics
+
+Matches used to start cold — empty Basecamps, Player 1 always first. Now:
+
+1. **Coin flip, first.**
+2. **Both Basecamps seed themselves, off the untouched deck.** Two of each
+   deck's cost-1 cards are picked **at random**, flipped face-down into the
+   Basecamp, then turned face-up. Slot 0 (the Guardian) is whichever of the two
+   randomly lands there. This step runs *before* any card is dealt — see the bug
+   note below for why that order is load-bearing, not incidental.
+3. **Hands are dealt.** The player going first gets **3** cards, the other
+   **4**. Going first is a real edge with a Pool that ramps every turn, and the
+   extra card is what offsets it — the written spec flagged this as unaddressed
+   and this is the fix.
+4. **The Pool starts empty.** 0 mana on turn 1. The written spec has 1 starting
+   mana from a prep conversion step that was deliberately cut — see Notes below.
+
+**Relics no longer come from the deck or hand.** Each player's 2 are set aside at
+game start and placed **face-down** in the Relic slots — inert, invisible in
+effect, on the board from turn 1. Clearing an Event flips one: the player is
+shown both (still-hidden) Relics face-up and picks which unlocks, since decks are
+random and this is the only time they'd otherwise know what they're holding.
+
+**The one-line guard that makes this safe:** `PlayerBoard.hasRelic` — the single
+chokepoint all ten Relic effects call through — now requires `!faceDown`.
+Without it, seating two Relics on the board at game start would make every
+Relic effect live before anyone unlocked anything. Probe checks this directly:
+a face-down Relic must be inert, and flipping it must switch it on.
+
+**The cascade case:** clearing two Events in one action (banked points reach
+past the first Event into the one it just revealed) must unlock **two** Relics,
+not one. Handled inside the same loop that already cascades Event clears; pinned
+by a probe check that stacks a cascade and confirms both Relics unlock.
+
+**The choice UI is new territory for this project** — the first player-choice
+overlay ever built here. Mechanically it's an `async` engine method suspended on
+a `withCheckedContinuation`, resumed when the view calls back with a pick.
+That's the shape player-chosen *targeting* — the single largest remaining
+TODO — would need too.
+
+Card counts are conserved: `deck.count + basecamp.count + hand.count == 28` for
+each side, checked directly.
+
+### Notes and open items
+
+- **A real ordering bug turned up during verification, not design.** The first
+  version dealt hands *before* seeding the Basecamp. `buildDeck()` only
+  guarantees the *deck* holds ≥2 cost-1 cards — it says nothing about where
+  they land — so dealing first could draw one into a hand and leave the seed
+  short. It surfaced as a genuine flake in the probe, roughly 1 run in 6–8, not
+  as a deterministic failure — easy to miss with casual testing. Fixed by
+  moving the seed step to run immediately after the coin flip, before any card
+  leaves the deck. Repeated the probe **8 times in a row, 0 failures**, after
+  the fix — a single clean pass isn't enough evidence for something
+  probabilistic; a spread of reruns is.
+- **The Guardian is now random**, not chosen — it's whichever of the two seeded
+  cards lands in slot 0. Slot 0 takes Raid damage and Lion's/Nehemiah's auras,
+  so this isn't inert, but it follows from seeding being random at all.
+- **Six cards are now near-auto-includes.** Only 6 of 69 bodies cost 1
+  (Sparrow, Tide Pool Crab, Ant, Lamb, Shepherd Boy, Field Hand), and every deck
+  is now forced to hold at least 2 of them — `MatchViewModel.buildDeck` splits
+  the pool and guarantees it, because an unconstrained 28-card draw comes up
+  short about 1 game in 5. Fixable with more cost-1 card designs; not engine work.
+- **Relics are unpriced.** They cost no mana and arrive on a fixed schedule, so
+  Watchtower (was 2) and Shepherd's Staff (was 7) are equal. Fish Net's point
+  doubling is flagged in the spec as the worst offender, landing free exactly
+  when it matters most. A balance pass is owed and not part of this change.
+- **The written spec's "start with 1 mana" was cut.** It comes from a "convert 1
+  card during preparing" step the spec describes; that step was deliberately
+  left out, so `bible-tcg-rules.md` and `cards.json` now document a 0-mana start
+  instead of the spec's 1. If that conversion step gets built later, both files
+  need the same correction again.
 
 ---
 
@@ -373,7 +449,7 @@ Sacrifice from clearing. `#if DEBUG` and opt-in — a normal launch is unaffecte
 
 ### Verified
 
-Probe 79/79. In the simulator: convert, play, attack-and-kill, Sacrifice → Altar,
+Probe 94/94. In the simulator: convert, play, attack-and-kill, Sacrifice → Altar,
 Event clear → Altar sweep → badge stamp → next Event revealed, and Elder's aura
 applying to a Frontier Human. The aura *cascade* is covered by the probe
 ("aura retracts and kills the dependent card") rather than watched.

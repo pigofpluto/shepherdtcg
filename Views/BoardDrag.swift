@@ -11,7 +11,6 @@ enum DropTarget: Equatable {
     case frontier(PlayerSide)
     case manaPool(PlayerSide)
     case altar(PlayerSide)
-    case relics(PlayerSide)
     case card(UUID)
 }
 
@@ -72,7 +71,6 @@ struct DragResolver {
         let side = vm.turnSide
         if frame.rect(MatLayout.manaPoolRegion(side)).contains(p) { return .manaPool(side) }
         if frame.rect(MatLayout.altarRegion(side)).contains(p)  { return .altar(side) }
-        if frame.rect(MatLayout.relicRegion(side)).contains(p)  { return .relics(side) }
         if frame.rect(MatLayout.campRegion(side)).contains(p)   { return .camp(side) }
         if frame.rect(MatLayout.frontierRegion(side)).contains(p) { return .frontier(side) }
         return nil
@@ -80,15 +78,13 @@ struct DragResolver {
 
     /// What dropping `card` on `target` would do, or nil if it isn't allowed.
     func action(dropping card: CardInstance, on target: DropTarget?) -> DropAction? {
-        guard let target, !vm.busy, vm.winner == nil, !vm.awaitingHandoff else { return nil }
+        guard let target, vm.phase == .playing, !vm.busy,
+              vm.winner == nil, !vm.awaitingHandoff else { return nil }
         let side = vm.turnSide
 
         switch (card.zone, target) {
         case (.hand, .camp(let s)) where s == side:
-            return card.card.type != .relic && vm.canPlay(card, on: side) ? .play : nil
-
-        case (.hand, .relics(let s)) where s == side:
-            return card.card.type == .relic && vm.canPlay(card, on: side) ? .play : nil
+            return vm.canPlay(card, on: side) ? .play : nil
 
         case (.hand, .manaPool(let s)) where s == side:
             return vm.canConvert(card, on: side) ? .convert : nil
@@ -113,7 +109,7 @@ struct DragResolver {
         var out: Set<DropTargetKey> = []
         let side = vm.turnSide
         let candidates: [DropTarget] = [
-            .camp(side), .relics(side), .manaPool(side), .frontier(side), .altar(side),
+            .camp(side), .manaPool(side), .frontier(side), .altar(side),
         ] + vm.board(side == .you ? .foe : .you).allInPlay.map { .card($0.id) }
 
         for t in candidates where action(dropping: card, on: t) != nil {
@@ -149,7 +145,6 @@ struct DropTargetKey: Hashable {
         case .frontier(let s): raw = "frontier\(s)"
         case .manaPool(let s): raw = "manaPool\(s)"
         case .altar(let s):    raw = "altar\(s)"
-        case .relics(let s):   raw = "relics\(s)"
         case .card(let id):    raw = "card\(id)"
         }
     }
